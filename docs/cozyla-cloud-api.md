@@ -1,0 +1,291 @@
+# Cozyla Cloud API
+
+Reverse-engineered from decompiled APKs (static analysis only, no live calls). Field names and endpoints are taken from obfuscated Kotlin/Java sources; treat response shapes marked "inferred" as unverified until exercised against the live server.
+
+## Source
+
+| App | Package | Version | Role |
+|---|---|---|---|
+| Cozyla ID | `com.cozyla.id` | 1.0.0.2026072318 | Account, login, token issuance, members |
+| Tasks/Chores | `com.cozyla.choresreward` | 1.2.8.2026091017 | To-do lists & items, chores, rewards |
+
+Decompiled with jadx 1.5.6 from APKs pulled off a Calendar 2+ (firmware 20250826).
+
+## Base URLs
+
+- Production: `https://api.cozylacal.com/`
+- UAT: `https://uat-api.cozyla.us/`
+- Dev (Tasks): `https://smartdevicespvt.cozyla.link/`
+
+Tasks app selector: `com/cozyla/choresreward/api/Api.java` (`getCozylaBaseUrl()` keyed on product channel `devTest`/UAT/release). ID app hardcodes production in `com/cozyla/id/a.java`. All endpoints are prefixed `/cal-server/`.
+
+## Authentication
+
+### Login endpoint
+
+`POST /cal-server/users/cozUsers/signIn` → `CozylaBaseResult<RegisterResult>`
+(`com/cozyla/id/api/CozylaService.java`, body built in `com/cozyla/id/ui/login/LoginViewModel$login$1.java`)
+
+Login is **email + password**. No verification code, QR pairing, device-binding handshake, or Google sign-in is involved in the password login path. Request body (JSON):
+
+```json
+{
+  "email": "user@example.com",
+  "encryptionPassword": "<base64 RSA-encrypted password>",
+  "app_id": "Notes",
+  "deviceSn": "<device serial>",
+  "loginClient": "DEVICE",
+  "deviceName": "<Build.MODEL>"
+}
+```
+
+- `app_id` — source-app label (`APPSourceEnum` name, e.g. `Notes`, `Chores`, `Calendar`); defaults to `Notes`. Passed from the launching intent; appears cosmetic.
+- `deviceSn` — `CzlDeviceUtils.a()`: `Build.getSerial()`, else `Settings.Secure.ANDROID_ID`, else a persisted random UUID (hex, no dashes). **Client-chosen; any stable string works.**
+- `loginClient` — constant `"DEVICE"`.
+- `deviceName` — `Build.MODEL`.
+
+### Password encryption
+
+`com/cozyla/id/util/RSAEncryptionUserInfo.java`:
+- Algorithm: `RSA/ECB/PKCS1Padding`, encrypt with a hardcoded X.509 public key, output Base64.
+- Public key (Base64 SPKI, RSA-2048):
+  ```
+  MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuy5lIpsXk9rk3rY/9yxWII+r6oLaMNc5pWw1XrbQaoEn2EUI0O2QXfF7C7S89FHZKoZlz0MDD0W9X6dCldWpIjZYf+5fjlsrQDOkfJULlwTn8b91pe/NYiv2YWCdfTv1Pq9tTy6rkw4C66S7PW4rxVmFxWHI1yXvaRVCLe70YFZYrOe+YUzruYRYSi4im77ITdZ7W2HAiQ2RwsJJXd8M2Y8w43aT3NXz1s/mKcpZrABgD0MQSdYadmKs6Cdm6H6oBRYuca5YxQSfg2VAu2qliZKEU2nVV2PWAYzDcnH7a2HMv0FylabwP4on7n59yNWe0nH7L47457IL354qmJnVEQIDAQAB
+  ```
+- `encryptionPassword` = `RSAEncryptionUserInfo.a(plaintextPassword)`. This is a public key, so a server client can replicate it with the password alone. The plaintext password is the raw user password (not hashed first).
+
+There is also MD5 (`util/MD5Utils.java`) and AES (`util/AESUtil.java`) in the ID app, but neither is used for the login password — AES is only for the content-provider token hand-off (below).
+
+### Response: `RegisterResult` (`com/cozyla/id/bean/RegisterResult.java`)
+
+Issued by `signIn`, `signUp`, `resetPassword`. Fields:
+
+| Field | Type | Notes |
+|---|---|---|
+| `token` | string | Bearer-less auth token (see headers) |
+| `deviceUid` | string | Server-assigned device/account id; sent back on requests |
+| `deviceSn` | string | Echo of device serial |
+| `memberUid` | string | Primary member id |
+| `email` | string | |
+| `calendarCode` | string | |
+| `certificatePem` | string | IoT/MQTT cert material |
+| `deviceRegisterVo` | object (`DeviceIotBean`) | IoT registration payload |
+| `registerTime` | string | |
+| `loginLimitCountdown` | int | Seconds locked out when `code==1002` |
+| `content` | string | Error text when `code==1001` |
+
+Login error codes (handled in `LoginActivity`/`LoginViewModel$login$1`): `1001` = bad credentials (message in `content`), `1002` = rate-limited/locked (`loginLimitCountdown` seconds).
+
+### Token lifetime / refresh
+
+No refresh endpoint exists. The token is used until the server returns envelope `code` `101`/`102` (token expired/invalid), at which point both apps clear the stored token and force re-login (`CheckTokenValidInterceptor`, `fa/b.java`). Re-authentication is a fresh `signIn`. `POST /cal-server/users/cozUsers/loginOut` invalidates server-side.
+
+### Can a server log in with just email + password?
+
+**Yes.** `signIn` needs only `email` + RSA-encrypted `password`; `deviceSn`/`app_id`/`deviceName`/`loginClient` are client-supplied strings (any value), and `deviceUid`/`memberUid` are returned *in the response*, not required in the request. A server can pick an arbitrary stable `deviceSn`. Caveats:
+- `code 1002` indicates brute-force lockout; keep the same `deviceSn` and avoid hammering.
+- The token likely binds to the `deviceSn` presented at login, so reuse the same value across requests.
+- Logging in from a new `deviceSn` may displace the tablet's session (the ID app has a `keepOtherDeviceLogin` flag on email/password-change flows, implying single-session-per-device semantics).
+
+### How the Tasks app gets the token (copy-from-tablet path)
+
+The Tasks app does **not** log in. It reads the token from the ID app's content provider:
+
+- Provider: `com.cozyla.id.provider`, path `cozyla_id`, `exported=true`. **The ID app declares `android:sharedUserId="android.uid.system"`** (manifest), i.e. it is a system app.
+- Query URI: `content://com.cozyla.id.provider/cozyla_id?ts=<yyyyMMdd>&action=token` (built in `choresreward util/y0.d()`), parsed into `CozylaToken {deviceSn, deviceUid, email, memberUid, token}`.
+- The provider gates callers: `getNameForUid(Binder.getCallingUid())` must start with `com.cozyla.`, `com.android.`, or `android.` (`CozylaIdContentProvider.b()`).
+- The result row is **AES-encrypted** (`AESUtil.encrypt(json, callerPackageName, ts)`), where the key is derived by `PBKDF2WithHmacSHA256(password=callerPackageName, salt=ts, 10000 iters, 256-bit)` and IV from `ts` bytes (`AES/CBC/PKCS5Padding`). `ts` = `yyyyMMdd` of today.
+
+Implication for a "copy token from tablet" client: you can pull the raw token off the tablet (it is stored in the ID app's `czl_token_prefs` SharedPreferences via `TokenManager`, and broadcast via the provider), then send it as the `Authorization` header from your own client. The provider's package-name gate and AES wrapping only matter if you read it *through the provider as another app*; a root/ADB read of the prefs file, or decrypting with your own package name + today's `ts`, both work. The token value itself carries the auth — no device attestation on normal API calls.
+
+ID app also broadcasts lifecycle intents consumed by `CozylaIdReceiver` in the Tasks app: `com.cozyla.id.ACTION_NOTIFY_LOGIN`, `ACTION_NOTIFY_LOGOUT`, `ACTION_SUBSCRIPTION_CHANGE`, `ACTION_NOTIFY_MEMBER_CHANGE`, `ACTION_EXIT`.
+
+## Request headers
+
+No request signing, HMAC, nonce, or timestamp signature exists in either app. Auth is the bare token in `Authorization`.
+
+Added by the Tasks app interceptor (`fa/c.java`, case 0) on non-GET requests when a token is present:
+
+| Header | Value |
+|---|---|
+| `Authorization` | raw token, **no `Bearer` prefix** |
+| `timeZoneId` | `TimeZone.getDefault().getID()` (e.g. `Europe/Amsterdam`) |
+| `Accept-Language` | `<lang-tag>,<lang>;q=0.9` |
+| `X-DEVICE-INFO` | Base64 of a Gson-serialized `DeviceInfo` (below) |
+
+ID app interceptor (`com/cozyla/id/network/ParamInterceptor.java`) adds the same plus `modelName` (`Build.MODEL`), `platform` (`Android`), `calendarOsVersion` (`Build.DISPLAY`). Image loads (Glide/Coil) send only `Authorization` (raw) and `timeZoneId` (`nc/c.java`, `sb/o.java`).
+
+`X-DEVICE-INFO` decodes to JSON with keys (`@SerializedName`, `com/cozyla/.../bean/DeviceInfo.java`): `deviceSn`, `deviceUid`, `deviceVersion` (Build.DISPLAY), `deviceType` (`"Device"`), `modelName` (Build.MODEL), `deviceName` (Build.DEVICE), `osVersion` (Build.VERSION.RELEASE), `appVersion`, `packageName`, `deviceBrand` (Build.BRAND), `deviceManufacturer`, `screenResolution` (`WxH`), `timeZoneId`, `loginClient` (`"DEVICE"`). `deviceSn`/`deviceUid` come from the stored token. The server appears to tolerate requests without it (header is best-effort), but sending it with the token's `deviceSn`/`deviceUid` is safest.
+
+### `deviceUid` injected into the body
+
+The Tasks interceptor also **injects `deviceUid` into the request body** of POST/PUT requests (`fa/c.java`): for form bodies it adds a `deviceUid` field; for JSON bodies it parses the JSON and adds `"deviceUid": "<token.deviceUid>"`. This is why every `*Param` extends `CzlBaseParam` (field `deviceUid`, populated from the token). A hand-rolled client should include `deviceUid` in each JSON body rather than rely on the interceptor.
+
+## Response envelope
+
+`CozylaBaseResult<T>` (`com/cozyla/id/bean/CozylaBaseResult.java`), parsed by `CozylaBaseResultDeserializer`:
+
+```json
+{ "code": 0, "message": "success", "requestId": "...", "result": { } }
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `code` | int | `0` = success (`isSuccess() { code == 0 }`) |
+| `message` | string | human-readable; `msg()` accessor |
+| `requestId` | string | |
+| `result` | T | payload; `data()` accessor |
+
+Token-expired / invalid: `code` `101` or `102` → clients clear the token and force re-login. Login-specific: `1001` bad credentials, `1002` rate-limited.
+
+## Members
+
+`POST /cal-server/users/cozUsersMember/queryMembers`
+
+Tasks app body — `GetFamilyMembersParam`: `{ "app": 1, "deviceUid": "<uid>" }` (`app` defaults to `1` in the Tasks app). Returns a list of family members.
+
+ID app variant takes an empty/minimal JSON body plus the device headers and returns `List<ResultMeberInfo>`.
+
+Member object (union of `FamilyMemberBean` / `ResultMeberInfo` / `db/reward/MemberBean`):
+
+| Field | Type | Notes |
+|---|---|---|
+| `memberUid` | string | **This is what `assignMemberUid` on a to-do references** |
+| `memberName` | string | |
+| `headPortrait` | string | avatar URL (relative; prefix with base URL, send `Authorization` to fetch) |
+| `color` | string | |
+| `gender` | string | |
+| `role` | string | |
+| `coins` | int | reward balance |
+| `memberType` | int | |
+| `mainMemberUid` | string | parent/primary account uid |
+| `deviceMemberId` | string | |
+
+Related: `POST /cal-server/users/cozUsersMember/queryMembersWithRing`, `addUserMember`, `updateUserMember`, `deleteUserMember`.
+
+## To-do lists
+
+All POST, JSON body, each extends `CzlBaseParam` (so every body also carries `deviceUid`). No `@SerializedName` renames anywhere in the to-do DTOs — JSON keys equal the Kotlin field names. DTOs: `com/cozyla/choresreward/api/v1_1_4/*`, `db/todolist/*`, `db/todo/*`. Interface: `com/cozyla/choresreward/api/CozylaService.java`.
+
+### `TodoListNetBean` (list item in responses)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `listId` | long | list id |
+| `todoListTitle` | string | |
+| `todoListColor` | string | |
+| `todoListIcon` | string | icon name/key |
+| `displayOrder` | double | sort key (fractional for reordering) |
+| `isPreset` | int | 1 = built-in/preset list |
+| `userId` | int | |
+| `createDate` | long | epoch ms |
+| `version` | long | optimistic-concurrency / sync version |
+
+### `GET list` — `POST /cal-server/rewards/todosList/list`
+Request `GetTodoListParam`: body is just `{ "deviceUid": "<uid>" }` (no other fields).
+Response: `CozylaBaseResult<List<TodoListNetBean>>`.
+
+### `create` — `POST /cal-server/rewards/todosList/create`
+`CreateTodoListParam`:
+```json
+{ "deviceUid":"<uid>", "todoListTitle":"Groceries", "todoListColor":"#FFAA00", "todoListIcon":"cart", "version":0 }
+```
+Response `CreateTodoListRsp`: `{ "listId": <long>, "displayOrder": <double>, "version": <long>, "createDate": <long> }`.
+
+### `update` — `POST /cal-server/rewards/todosList/update`
+`UpdateTodoListParam`:
+```json
+{ "deviceUid":"<uid>", "listId":123, "todoListTitle":"...", "todoListColor":"...", "todoListIcon":"..." }
+```
+Response: `CozylaBaseResult<Object>` (no typed payload).
+
+### `delete` — `POST /cal-server/rewards/todosList/delete`
+`DeleteTodoListParam`: `{ "deviceUid":"<uid>", "id": 123 }` (`id` = listId). Response: `Object`.
+
+### `updateDisplayOrder` — `POST /cal-server/rewards/todosList/updateDisplayOrder`
+`UpdateListOrderParam`: `{ "deviceUid":"<uid>", "id":123, "displayOrder": 1.5 }`. Response: `Object`.
+
+### Offline sync — `POST /cal-server/rewards/todosList/offline/syncUpdateTodosList`
+`UploadOfflineTodoListParam` (batch upload for offline edits; not needed for an online client).
+
+## To-do items
+
+### `TodoNetBean` (item in responses) — `db/todo/TodoNetBean.java`
+
+| Field | Type | Meaning |
+|---|---|---|
+| `todoId` | long | item id |
+| `todoListId` | long | parent list id |
+| `todoTitle` | string | |
+| `todoDesc` | string | description |
+| `assignMemberUid` | string | `memberUid` of assignee; null/empty = unassigned |
+| `todoStars` | int | reward stars/points attached to the task |
+| `isFlag` | int | flag/important marker: `1` = flagged, `0` = not (used as boolean in UI) |
+| `completeStatus` | int | `1` = completed, `0` = open (Room filters `completeStatus = 1` as done) |
+| `completeTime` | long | epoch ms when completed, `0` if open |
+| `createTime` | long | epoch ms |
+| `displayOrder` | double | sort key in a list |
+| `profileDisplayOrder` | double | sort key in a member's profile view |
+| `dueDateTime` | long (nullable) | **epoch milliseconds** (derived from `Date.getTime()`); all-day due dates use `HH:mm = 23:59` |
+| `reminderTime` | int (nullable) | reminder lead amount; `-1`/absent = no reminder |
+| `timeUnit` | string (nullable) | reminder unit; observed `"none"` and `"day"`; paired with `reminderTime` (e.g. N days before due). Other units (hour/minute/week) likely but not confirmed in strings |
+| `version` | long | sync/concurrency version |
+
+### `GET list` — `POST /cal-server/rewards/todosInfo/list`
+`GetTodoInfosParam`: body `{ "deviceUid":"<uid>" }` only. Response: `CozylaBaseResult<List<TodoNetBean>>` (all items across lists; client filters by `todoListId`/`assignMemberUid`/`completeStatus`).
+
+### `create` — `POST /cal-server/rewards/todosInfo/create`
+`CreateTodoInfoParam`:
+```json
+{
+  "deviceUid":"<uid>",
+  "todoListId": 123,
+  "todoTitle": "Buy milk",
+  "todoDesc": "2 liters",
+  "assignMemberUid": "<memberUid or null>",
+  "todoStars": 3,
+  "isFlag": 0,
+  "dueDateTime": 1760131140000,
+  "reminderTime": 1,
+  "timeUnit": "day"
+}
+```
+(`todoListId`, `dueDateTime`, `reminderTime` are nullable; `todoStars`/`isFlag` are primitive ints.) Response `CreateTodoInfoRsp`: `{ "todoId":<long>, "todoListId":<long>, "displayOrder":<double>, "profileDisplayOrder":<double>, "createTime":<long>, "version":<long> }`.
+
+### `update` — `POST /cal-server/rewards/todosInfo/update`
+`UpdateTodoInfoParam` (requires `todoId` + `todoListId`; `isFlag`/`todoStars` nullable here):
+```json
+{ "deviceUid":"<uid>", "todoId":456, "todoListId":123, "todoTitle":"...", "todoDesc":"...",
+  "assignMemberUid":"...", "todoStars":3, "isFlag":1, "dueDateTime":1760131140000, "reminderTime":2, "timeUnit":"day" }
+```
+Response: `CozylaBaseResult<TodoNetBean>` (the updated item).
+
+### `checkTodo` — `POST /cal-server/rewards/todosInfo/checkTodo`
+`CheckTodoInfoParam`: `{ "deviceUid":"<uid>", "todoId":456, "completeStatus":1 }` (toggle complete/open). Response `CheckTodoInfoRsp`: `{ "todoId":<long>, "completeStatus":<int>, "completeTime":<long>, "version":<long> }`.
+
+### `delete` — `POST /cal-server/rewards/todosInfo/delete`
+`DeleteTodoInfoParam`: `{ "deviceUid":"<uid>", "id":456 }` (`id` = todoId). Response: `Object`.
+
+### `updateDisplayOrder` — `POST /cal-server/rewards/todosInfo/updateDisplayOrder`
+`UpdateTodoDisplayOrderParam`: `{ "deviceUid":"<uid>", "id":456, "displayOrder":2.0, "profileDisplayOrder":1.0 }` (order fields nullable `Double`). Response: `Object`.
+
+### `deleteTodoByTime` — `POST /cal-server/rewards/todosInfo/deleteTodoByTime`
+Two body shapes hit the same path:
+- `DeleteListTodoParam`: `{ "deviceUid":"<uid>", "listId":123, "deleteTime":<int> }` — clear completed items in a list.
+- `DeleteMemberTodoParam`: `{ "deviceUid":"<uid>", "memberUid":"<uid>", "deleteTime":<int> }` — clear completed items for a member.
+(`deleteTime` is an int flag/threshold selecting what to purge; exact encoding not resolved statically.) Response: `Object`.
+
+### Offline sync — `POST /cal-server/rewards/todosInfo/offline/syncUpdateTodos`
+`UploadOfflineTodosParam` (batch; not needed online). Also `POST /cal-server/rewards/todosInfo/needNotifiedTodoInfos` returns items due for reminder notification.
+
+## Open questions
+
+- **Token lifetime**: no TTL or refresh is visible; expiry is only detected reactively via `code 101/102`. Unknown how long a token lasts or whether a second `signIn` from a different `deviceSn` revokes the tablet's token.
+- **`deviceUid` binding**: whether the server validates that the request's `deviceUid`/`deviceSn` matches the one the token was issued to (if so, a server client must reuse the tablet's `deviceUid`, or log in with its own and use the returned `deviceUid`).
+- **`X-DEVICE-INFO` requirement**: whether the server rejects requests lacking it, or any specific field within it.
+- **`deleteTime` semantics** in `deleteTodoByTime` (int) — likely a time-bucket or "older than" selector; not determinable statically.
+- **`timeUnit` full value set** — only `"none"` and `"day"` appear as literals; hour/minute/week plausible but unconfirmed.
+- **`reminderTime` unit relationship** — assumed "N × timeUnit before `dueDateTime`"; not proven.
+- **ID-app `queryMembers` exact request body** — uses a `HeaderMap` + body; the body fields beyond device headers were not fully resolved.
+- **Rate-limit policy** behind `code 1002` (threshold, lockout duration source).
+- **Server-side success codes other than 0** for non-auth errors are not enumerated in the client.
