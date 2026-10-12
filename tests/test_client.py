@@ -3,6 +3,7 @@ import base64
 from datetime import UTC, datetime
 
 import pytest
+from conftest import LIST_ID, TODO_ID
 
 from cozyla.client import CozylaError, NotFoundError, encrypt_password
 from cozyla.models import TodoCreate, TodoListCreate, TodoUpdate
@@ -47,18 +48,27 @@ def test_todo_lifecycle(cloud, make_client):
         client = make_client()
         created_list = await client.create_todo_list(TodoListCreate(title="Chores", icon="broom"))
         todo = await client.create_todo(
-            created_list.id, TodoCreate(title="Vacuum", stars=3, due=due)
+            created_list.id, TodoCreate(title="Vacuum", stars=3, due=due, reminder_minutes=1440)
         )
         await client.update_todo(created_list.id, todo.id, TodoUpdate(title="Vacuum hall"))
         done = await client.update_todo(created_list.id, todo.id, TodoUpdate(completed=True))
         return todo, done
 
     todo, done = asyncio.run(run())
-    assert todo.due == due
+    assert (todo.due, todo.reminder_minutes) == (due, 1440)
     assert (done.title, done.stars, done.due, done.completed) == ("Vacuum hall", 3, due, True)
-    assert cloud.todos[todo.id]["dueDateTime"] == int(due.timestamp() * 1000)
+    stored = cloud.todos[int(todo.id)]
+    assert (stored["dueDateTime"], stored["timeUnit"]) == (
+        int(due.timestamp() * 1000),
+        "one_day_before",
+    )
+
+
+def test_unset_values_read_as_none(make_client):
+    todo = asyncio.run(make_client().get_todo(str(LIST_ID), str(TODO_ID)))
+    assert (todo.id, todo.due, todo.reminder_minutes) == (str(TODO_ID), None, None)
 
 
 def test_unknown_todo_is_not_found(make_client):
     with pytest.raises(NotFoundError):
-        asyncio.run(make_client().update_todo(1, 999, TodoUpdate(title="x")))
+        asyncio.run(make_client().update_todo(str(LIST_ID), "999", TodoUpdate(title="x")))

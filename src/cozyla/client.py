@@ -1,4 +1,5 @@
 import base64
+import json
 from datetime import datetime
 
 import httpx
@@ -34,21 +35,34 @@ def encrypt_password(password: str) -> str:
     return base64.b64encode(key.encrypt(password.encode(), padding.PKCS1v15())).decode()
 
 
-def _ms(dt: datetime | None) -> int | None:
-    return None if dt is None else int(dt.timestamp() * 1000)
+def _ms(dt: datetime | None) -> int:
+    return -1 if dt is None else int(dt.timestamp() * 1000)
 
 
-def _todo_body(todo: Todo | TodoCreate, list_id: int) -> dict:
+def _reminder_preset(minutes: int | None) -> str:
+    presets = {0: "on_time", 5: "minutes_before_5", 30: "minutes_before_30"}
+    presets |= {60: "one_hour_before", 1440: "one_day_before"}
+    if minutes is None:
+        return "none"
+    if minutes in presets:
+        return presets[minutes]
+    for unit, size in (("week", 10080), ("day", 1440), ("hour", 60)):
+        if minutes % size == 0:
+            return f"custom_{unit}"
+    return "custom_minute"
+
+
+def _todo_body(todo: Todo | TodoCreate, list_id: str) -> dict:
     return {
-        "todoListId": list_id,
+        "todoListId": int(list_id),
         "todoTitle": todo.title,
-        "todoDesc": todo.description,
+        "todoDesc": todo.description or "",
         "assignMemberUid": todo.assignee,
         "todoStars": todo.stars,
         "isFlag": int(todo.flagged),
         "dueDateTime": _ms(todo.due),
-        "reminderTime": todo.reminder_time,
-        "timeUnit": todo.reminder_unit,
+        "reminderTime": -1 if todo.reminder_minutes is None else todo.reminder_minutes,
+        "timeUnit": _reminder_preset(todo.reminder_minutes),
     }
 
 
@@ -73,12 +87,42 @@ class CozylaClient:
     async def aclose(self) -> None:
         await self._http.aclose()
 
-    async def _post(self, path: str, body: dict, headers: dict | None = None):
-        response = await self._http.post(path, json=body, headers=headers)
+    def _headers(self) -> dict:
+        device_info = {
+            "deviceSn": self._device_sn,
+            "deviceUid": self._device_uid,
+            "deviceVersion": "cozyla-sdk",
+            "deviceType": "Device",
+            "modelName": "cozyla-sdk",
+            "deviceName": "cozyla-sdk",
+            "osVersion": "14",
+            "appVersion": "1.0.0",
+            "packageName": "com.cozyla.id",
+            "deviceBrand": "Cozyla",
+            "deviceManufacturer": "Cozyla",
+            "screenResolution": "1920x1080",
+            "timeZoneId": self._timezone,
+            "loginClient": "DEVICE",
+        }
+        headers = {
+            "timeZoneId": self._timezone,
+            "modelName": "cozyla-sdk",
+            "platform": "Android",
+            "calendarOsVersion": "cozyla-sdk",
+            "Accept-Language": "en-US,en;q=0.9",
+            "X-DEVICE-INFO": base64.b64encode(json.dumps(device_info).encode()).decode(),
+        }
+        if self._token:
+            headers["Authorization"] = self._token
+        return headers
+
+    async def _post(self, path: str, body: dict):
+        response = await self._http.post(path, json=body, headers=self._headers())
         response.raise_for_status()
         envelope = response.json()
-        if envelope.get("code") != 0:
-            raise CozylaError(envelope.get("code", -1), envelope.get("message") or "")
+        code = int(envelope.get("code", -1))
+        if code != 0:
+            raise CozylaError(code, envelope.get("message") or "")
         return envelope.get("result")
 
     async def login(self) -> None:
@@ -99,9 +143,8 @@ class CozylaClient:
     async def call(self, path: str, body: dict | None = None, *, retry: bool = True):
         if self._token is None:
             await self.login()
-        headers = {"Authorization": self._token, "timeZoneId": self._timezone}
         try:
-            return await self._post(path, {**(body or {}), "deviceUid": self._device_uid}, headers)
+            return await self._post(path, {**(body or {}), "deviceUid": self._device_uid})
         except CozylaError as e:
             if retry and e.code in TOKEN_EXPIRED:
                 self._token = None
@@ -116,7 +159,7 @@ class CozylaClient:
         result = await self.call("/cal-server/rewards/todosList/list")
         return [TodoList.model_validate(t) for t in result or []]
 
-    async def get_todo_list(self, list_id: int) -> TodoList:
+    async def get_todo_list(self, list_id: str) -> TodoList:
         for todo_list in await self.list_todo_lists():
             if todo_list.id == list_id:
                 return todo_list
@@ -136,12 +179,12 @@ class CozylaClient:
             **data.model_dump(), id=result["listId"], display_order=result.get("displayOrder")
         )
 
-    async def update_todo_list(self, list_id: int, changes: dict) -> TodoList:
+    async def update_todo_list(self, list_id: str, changes: dict) -> TodoList:
         updated = (await self.get_todo_list(list_id)).model_copy(update=changes)
         await self.call(
             "/cal-server/rewards/todosList/update",
             {
-                "listId": list_id,
+                "listId": int(list_id),
                 "todoListTitle": updated.title,
                 "todoListColor": updated.color,
                 "todoListIcon": updated.icon,
@@ -149,40 +192,42 @@ class CozylaClient:
         )
         return updated
 
-    async def delete_todo_list(self, list_id: int) -> None:
+    async def delete_todo_list(self, list_id: str) -> None:
         await self.get_todo_list(list_id)
-        await self.call("/cal-server/rewards/todosList/delete", {"id": list_id})
+        await self.call("/cal-server/rewards/todosList/delete", {"id": int(list_id)})
 
-    async def list_todos(self, list_id: int | None = None) -> list[Todo]:
+    async def list_todos(self, list_id: str | None = None) -> list[Todo]:
         result = await self.call("/cal-server/rewards/todosInfo/list")
         todos = [Todo.model_validate(t) for t in result or []]
         return [t for t in todos if list_id is None or t.list_id == list_id]
 
-    async def get_todo(self, list_id: int, todo_id: int) -> Todo:
+    async def get_todo(self, list_id: str, todo_id: str) -> Todo:
         for todo in await self.list_todos(list_id):
             if todo.id == todo_id:
                 return todo
         raise NotFoundError(f"todo {todo_id} in list {list_id}")
 
-    async def create_todo(self, list_id: int, data: TodoCreate) -> Todo:
+    async def create_todo(self, list_id: str, data: TodoCreate) -> Todo:
         await self.get_todo_list(list_id)
         result = await self.call("/cal-server/rewards/todosInfo/create", _todo_body(data, list_id))
-        return await self.get_todo(list_id, result["todoId"])
+        return await self.get_todo(list_id, str(result["todoId"]))
 
-    async def update_todo(self, list_id: int, todo_id: int, data: TodoUpdate) -> Todo:
+    async def update_todo(self, list_id: str, todo_id: str, data: TodoUpdate) -> Todo:
         current = await self.get_todo(list_id, todo_id)
         changes = data.model_dump(exclude_unset=True)
         completed = changes.pop("completed", None)
         if changes:
             body = _todo_body(current.model_copy(update=changes), list_id)
-            await self.call("/cal-server/rewards/todosInfo/update", {"todoId": todo_id, **body})
+            await self.call(
+                "/cal-server/rewards/todosInfo/update", {"todoId": int(todo_id), **body}
+            )
         if completed is not None and completed != current.completed:
             await self.call(
                 "/cal-server/rewards/todosInfo/checkTodo",
-                {"todoId": todo_id, "completeStatus": int(completed)},
+                {"todoId": int(todo_id), "completeStatus": int(completed)},
             )
         return await self.get_todo(list_id, todo_id)
 
-    async def delete_todo(self, list_id: int, todo_id: int) -> None:
+    async def delete_todo(self, list_id: str, todo_id: str) -> None:
         await self.get_todo(list_id, todo_id)
-        await self.call("/cal-server/rewards/todosInfo/delete", {"id": todo_id})
+        await self.call("/cal-server/rewards/todosInfo/delete", {"id": int(todo_id)})

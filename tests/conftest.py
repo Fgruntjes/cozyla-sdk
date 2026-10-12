@@ -5,6 +5,9 @@ import pytest
 
 from cozyla.client import CozylaClient
 
+LIST_ID = 2105009974451359744
+TODO_ID = 2105029434214182912
+
 
 class FakeCloud:
     def __init__(self):
@@ -13,18 +16,25 @@ class FakeCloud:
         self.error_code: int | None = None
         self.requests: list[tuple[str, dict, httpx.Headers]] = []
         self.lists = {
-            1: {"listId": 1, "todoListTitle": "Groceries", "displayOrder": 1.0, "isPreset": 0}
+            LIST_ID: {
+                "listId": LIST_ID,
+                "todoListTitle": "Groceries",
+                "displayOrder": 1.0,
+                "isPreset": 3,
+            }
         }
         self.todos = {
-            10: {
-                "todoId": 10,
-                "todoListId": 1,
+            TODO_ID: {
+                "todoId": TODO_ID,
+                "todoListId": LIST_ID,
                 "todoTitle": "Milk",
                 "todoStars": 2,
                 "isFlag": 0,
                 "completeStatus": 0,
-                "completeTime": 0,
-                "dueDateTime": 1760131140000,
+                "completeTime": None,
+                "dueDateTime": -1,
+                "reminderTime": -1,
+                "timeUnit": "none",
                 "createTime": 1760000000000,
             }
         }
@@ -35,6 +45,8 @@ class FakeCloud:
         self.requests.append((path, body, request.headers))
         if path == "/cal-server/users/cozUsers/signIn":
             self.logins += 1
+            if "X-DEVICE-INFO" not in request.headers:
+                return self.reply(99, None)
             if body["email"] != "me@example.com" or not body["encryptionPassword"]:
                 return self.reply(1001, None)
             return self.reply(0, {"token": self.token, "deviceUid": "dev-1", "memberUid": "m-1"})
@@ -47,7 +59,7 @@ class FakeCloud:
 
     @staticmethod
     def reply(code, result):
-        return httpx.Response(200, json={"code": code, "message": "msg", "result": result})
+        return httpx.Response(200, json={"code": str(code), "message": "msg", "result": result})
 
     def users_cozUsersMember_queryMembers(self, body):
         return [{"memberUid": "m-1", "memberName": "Alex", "color": "#f00", "coins": 5}]

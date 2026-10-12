@@ -278,14 +278,26 @@ Two body shapes hit the same path:
 ### Offline sync — `POST /cal-server/rewards/todosInfo/offline/syncUpdateTodos`
 `UploadOfflineTodosParam` (batch; not needed online). Also `POST /cal-server/rewards/todosInfo/needNotifiedTodoInfos` returns items due for reminder notification.
 
+## Confirmed against the live API
+
+Checked on 2026-10-12 with a real account, logging in as a server (`deviceSn` `cozyla-sdk`).
+
+- `signIn` with email + RSA-encrypted password works from a server; no tablet serial is needed.
+- `signIn` without the ID app's device headers (`X-DEVICE-INFO`, `modelName`, `platform`, `calendarOsVersion`, `Accept-Language`, `timeZoneId`) returns `code` `99` "Error"; with them it succeeds.
+- The returned `deviceUid` is `deviceSn` + `memberUid` concatenated, and the result also carries `tokenUid`.
+- Envelope `code` arrives as a JSON **string** (`"0"`), not a number.
+- List and to-do ids are 64-bit integers above 2^53 (e.g. `2105009974451359744`); JavaScript clients lose precision, so this project's REST API returns them as strings.
+- "Not set" is `-1`: `dueDateTime: -1`, `reminderTime: -1`. `completeTime` can be `null` or a stale timestamp on an open item.
+- `reminderTime` is **minutes before `dueDateTime`** (1440 = one day). `timeUnit` is the app's preset label: `none`, `on_time`, `minutes_before_5`, `minutes_before_30`, `one_hour_before`, `one_day_before`, `custom_minute`, `custom_hour`, `custom_day`, `custom_week` (enum in the Tasks app).
+- `isPreset` is an integer type code (seen `1` and `3`), not a boolean.
+- `todosList/list` items also carry `todoNum` and `sourceType`; `todosInfo/list` items also carry `todoListTitle`, `memberName`, `assignMemberId`, `headPortrait`, `color`, `virtualDeviceUid`, `showMemberUidList`, `sourceType`.
+- `queryMembers` with `{"app": 1}` returns all family members with `memberUid`, `memberName`, `role`, `color`, `coins`, `memberType` (0 = main account, 1 = family member).
+- Create, update, `checkTodo` (complete and reopen) and delete for items, and create, update and delete for lists, all succeed with the bodies documented above; `update` keeps fields only when they are re-sent.
+
 ## Open questions
 
-- **Token lifetime**: no TTL or refresh is visible; expiry is only detected reactively via `code 101/102`. Unknown how long a token lasts or whether a second `signIn` from a different `deviceSn` revokes the tablet's token.
-- **`deviceUid` binding**: whether the server validates that the request's `deviceUid`/`deviceSn` matches the one the token was issued to (if so, a server client must reuse the tablet's `deviceUid`, or log in with its own and use the returned `deviceUid`).
-- **`X-DEVICE-INFO` requirement**: whether the server rejects requests lacking it, or any specific field within it.
-- **`deleteTime` semantics** in `deleteTodoByTime` (int) — likely a time-bucket or "older than" selector; not determinable statically.
-- **`timeUnit` full value set** — only `"none"` and `"day"` appear as literals; hour/minute/week plausible but unconfirmed.
-- **`reminderTime` unit relationship** — assumed "N × timeUnit before `dueDateTime`"; not proven.
-- **ID-app `queryMembers` exact request body** — uses a `HeaderMap` + body; the body fields beyond device headers were not fully resolved.
-- **Rate-limit policy** behind `code 1002` (threshold, lockout duration source).
-- **Server-side success codes other than 0** for non-auth errors are not enumerated in the client.
+- **Token lifetime**: no TTL is visible; expiry is detected via `code` `101`/`102`.
+- **Session eviction**: whether a server login with its own `deviceSn` signs the tablet out.
+- **`deleteTime` semantics** in `deleteTodoByTime`.
+- **Rate-limit policy** behind `code` `1002`.
+- **Meaning of the `isPreset` codes.**

@@ -1,5 +1,6 @@
 import httpx
 import pytest
+from conftest import LIST_ID
 from fastapi.testclient import TestClient
 
 from cozyla import api
@@ -28,22 +29,22 @@ def test_routes_require_token(http):
 
 def test_todo_crud(http, cloud):
     created = http.post(
-        "/todo-lists/1/items", json={"title": "Eggs", "flagged": True}, headers=AUTH
+        f"/todo-lists/{LIST_ID}/items", json={"title": "Eggs", "flagged": True}, headers=AUTH
     )
     assert created.status_code == 201
     todo = created.json()
     assert (todo["title"], todo["flagged"], todo["completed"]) == ("Eggs", True, False)
 
     patched = http.patch(
-        f"/todo-lists/1/items/{todo['id']}", json={"completed": True}, headers=AUTH
+        f"/todo-lists/{LIST_ID}/items/{todo['id']}", json={"completed": True}, headers=AUTH
     )
     assert patched.json()["completed"] is True
 
-    items = http.get("/todo-lists/1/items", headers=AUTH).json()
+    items = http.get(f"/todo-lists/{LIST_ID}/items", headers=AUTH).json()
     assert [item["title"] for item in items] == ["Milk", "Eggs"]
 
-    assert http.delete(f"/todo-lists/1/items/{todo['id']}", headers=AUTH).status_code == 204
-    assert todo["id"] not in cloud.todos
+    assert http.delete(f"/todo-lists/{LIST_ID}/items/{todo['id']}", headers=AUTH).status_code == 204
+    assert int(todo["id"]) not in cloud.todos
 
 
 def test_missing_list_is_404(http):

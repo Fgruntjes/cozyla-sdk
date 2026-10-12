@@ -3,32 +3,42 @@ from typing import Annotated
 
 from pydantic import AliasChoices, BaseModel, BeforeValidator, Field
 
-EpochMs = Annotated[datetime | None, BeforeValidator(lambda v: v or None)]
+
+def _unset_to_none(value):
+    return None if value is None or (isinstance(value, int) and value < 0) else value
+
+
+Id = Annotated[str, BeforeValidator(str)]
+EpochMs = Annotated[datetime | None, BeforeValidator(_unset_to_none)]
+Minutes = Annotated[int | None, BeforeValidator(_unset_to_none)]
+
+
+def _alias(cloud: str, name: str) -> AliasChoices:
+    return AliasChoices(cloud, name)
 
 
 class Member(BaseModel):
-    id: str = Field(validation_alias=AliasChoices("memberUid", "id"))
-    name: str = Field(validation_alias=AliasChoices("memberName", "name"))
-    color: str | None = None
+    id: str = Field(validation_alias=_alias("memberUid", "id"))
+    name: str = Field(validation_alias=_alias("memberName", "name"))
     role: str | None = None
+    color: str | None = None
     coins: int | None = None
 
 
 class TodoList(BaseModel):
-    id: int = Field(validation_alias=AliasChoices("listId", "id"))
-    title: str = Field(validation_alias=AliasChoices("todoListTitle", "title"))
-    color: str | None = Field(None, validation_alias=AliasChoices("todoListColor", "color"))
-    icon: str | None = Field(None, validation_alias=AliasChoices("todoListIcon", "icon"))
+    id: Id = Field(validation_alias=_alias("listId", "id"))
+    title: str = Field(validation_alias=_alias("todoListTitle", "title"))
+    color: str | None = Field(None, validation_alias=_alias("todoListColor", "color"))
+    icon: str | None = Field(None, validation_alias=_alias("todoListIcon", "icon"))
     display_order: float | None = Field(
-        None, validation_alias=AliasChoices("displayOrder", "display_order")
+        None, validation_alias=_alias("displayOrder", "display_order")
     )
-    preset: bool = Field(False, validation_alias=AliasChoices("isPreset", "preset"))
 
 
 class TodoListCreate(BaseModel):
     title: str = Field(min_length=1)
-    color: str | None = None
-    icon: str | None = None
+    color: str | None = Field(None, examples=["#E9B14D"])
+    icon: str | None = Field(None, examples=["icon_todolist_preset9"])
 
 
 class TodoListUpdate(BaseModel):
@@ -37,18 +47,16 @@ class TodoListUpdate(BaseModel):
     icon: str | None = None
 
 
-class TodoFields(BaseModel):
+class TodoCreate(BaseModel):
+    title: str = Field(min_length=1)
     description: str | None = None
     assignee: str | None = Field(None, description="Member id, see GET /members")
     stars: int = Field(0, ge=0, description="Reward stars earned on completion")
     flagged: bool = False
     due: datetime | None = None
-    reminder_time: int | None = Field(None, description="Remind this many reminder_unit before due")
-    reminder_unit: str | None = Field(None, description='e.g. "day"')
-
-
-class TodoCreate(TodoFields):
-    title: str = Field(min_length=1)
+    reminder_minutes: int | None = Field(
+        None, ge=0, description="Remind this many minutes before due; needs due"
+    )
 
 
 class TodoUpdate(BaseModel):
@@ -58,31 +66,24 @@ class TodoUpdate(BaseModel):
     stars: int | None = Field(None, ge=0)
     flagged: bool | None = None
     due: datetime | None = None
-    reminder_time: int | None = None
-    reminder_unit: str | None = None
+    reminder_minutes: int | None = Field(None, ge=0)
     completed: bool | None = None
 
 
-class Todo(TodoFields):
-    id: int = Field(validation_alias=AliasChoices("todoId", "id"))
-    list_id: int = Field(validation_alias=AliasChoices("todoListId", "list_id"))
-    title: str = Field(validation_alias=AliasChoices("todoTitle", "title"))
-    description: str | None = Field(None, validation_alias=AliasChoices("todoDesc", "description"))
-    assignee: str | None = Field(None, validation_alias=AliasChoices("assignMemberUid", "assignee"))
-    stars: int = Field(0, validation_alias=AliasChoices("todoStars", "stars"))
-    flagged: bool = Field(False, validation_alias=AliasChoices("isFlag", "flagged"))
-    due: EpochMs = Field(None, validation_alias=AliasChoices("dueDateTime", "due"))
-    reminder_time: int | None = Field(
-        None, validation_alias=AliasChoices("reminderTime", "reminder_time")
+class Todo(BaseModel):
+    id: Id = Field(validation_alias=_alias("todoId", "id"))
+    list_id: Id = Field(validation_alias=_alias("todoListId", "list_id"))
+    title: str = Field(validation_alias=_alias("todoTitle", "title"))
+    description: str | None = Field(None, validation_alias=_alias("todoDesc", "description"))
+    assignee: str | None = Field(None, validation_alias=_alias("assignMemberUid", "assignee"))
+    stars: int = Field(0, validation_alias=_alias("todoStars", "stars"))
+    flagged: bool = Field(False, validation_alias=_alias("isFlag", "flagged"))
+    due: EpochMs = Field(None, validation_alias=_alias("dueDateTime", "due"))
+    reminder_minutes: Minutes = Field(
+        None, validation_alias=_alias("reminderTime", "reminder_minutes")
     )
-    reminder_unit: str | None = Field(
-        None, validation_alias=AliasChoices("timeUnit", "reminder_unit")
-    )
-    completed: bool = Field(False, validation_alias=AliasChoices("completeStatus", "completed"))
-    completed_at: EpochMs = Field(
-        None, validation_alias=AliasChoices("completeTime", "completed_at")
-    )
-    created_at: EpochMs = Field(None, validation_alias=AliasChoices("createTime", "created_at"))
+    completed: bool = Field(False, validation_alias=_alias("completeStatus", "completed"))
+    created_at: EpochMs = Field(None, validation_alias=_alias("createTime", "created_at"))
     display_order: float | None = Field(
-        None, validation_alias=AliasChoices("displayOrder", "display_order")
+        None, validation_alias=_alias("displayOrder", "display_order")
     )

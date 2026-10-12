@@ -9,7 +9,7 @@ Cozyla can change that API at any time, and using it may conflict with their ter
 
 | Cozyla app | Status |
 |---|---|
-| Tasks → To-do lists and items | ✅ list, create, update, complete, delete |
+| Tasks → To-do lists and items | ✅ list, create, update, complete, delete (due dates, reminders, assignees, stars, flags) |
 | Family members (to-do assignees) | ✅ read |
 | Tasks → Chores, Routines, Rewards | planned |
 | Meals → Meal plan, Grocery, Pantry | planned |
@@ -27,17 +27,19 @@ Cozyla can change that API at any time, and using it may conflict with their ter
 | `TZ` | no | Time zone sent to Cozyla (default `UTC`) |
 
 ```bash
-uv run uvicorn cozyla.api:app --host 0.0.0.0 --port 8000
+cp .env.example .env  # then fill it in
+uv run --env-file .env uvicorn cozyla.api:app --host 0.0.0.0 --port 8000
 # or
 docker build -t cozyla-sdk . && docker run --env-file .env -p 8000:8000 cozyla-sdk
 ```
 
-Interactive API docs live at `http://localhost:8000/docs` and the OpenAPI schema at `/openapi.json`.
+Ids are 64-bit and returned as strings. Interactive API docs live at `http://localhost:8000/docs` and the OpenAPI schema at `/openapi.json`.
 
 ```bash
 curl -H "Authorization: Bearer $COZYLA_API_TOKEN" localhost:8000/todo-lists
 curl -H "Authorization: Bearer $COZYLA_API_TOKEN" -H 'Content-Type: application/json' \
-  -d '{"title": "Buy milk", "due": "2026-10-12T18:00:00+02:00"}' localhost:8000/todo-lists/1/items
+  -d '{"title": "Buy milk", "due": "2026-10-12T18:00:00+02:00", "reminder_minutes": 60}' \
+  localhost:8000/todo-lists/<list-id>/items
 ```
 
 ## Home Assistant
@@ -53,7 +55,7 @@ rest_command:
     payload: '{"title": "{{ title }}"}'
 
 rest:
-  - resource: http://cozyla-sdk:8000/todo-lists/1/items
+  - resource: http://cozyla-sdk:8000/todo-lists/<list-id>/items
     headers:
       Authorization: !secret cozyla_api_bearer
     scan_interval: 300

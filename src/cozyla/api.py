@@ -95,41 +95,41 @@ async def create_todo_list(data: TodoListCreate, client: Client) -> TodoList:
 
 
 @app.get("/todo-lists/{list_id}", tags=["todos"])
-async def get_todo_list(list_id: int, client: Client) -> TodoList:
+async def get_todo_list(list_id: str, client: Client) -> TodoList:
     return await client.get_todo_list(list_id)
 
 
 @app.patch("/todo-lists/{list_id}", tags=["todos"])
-async def update_todo_list(list_id: int, data: TodoListUpdate, client: Client) -> TodoList:
+async def update_todo_list(list_id: str, data: TodoListUpdate, client: Client) -> TodoList:
     return await client.update_todo_list(list_id, data.model_dump(exclude_unset=True))
 
 
 @app.delete("/todo-lists/{list_id}", status_code=204, tags=["todos"])
-async def delete_todo_list(list_id: int, client: Client) -> None:
+async def delete_todo_list(list_id: str, client: Client) -> None:
     await client.delete_todo_list(list_id)
 
 
 @app.get("/todo-lists/{list_id}/items", tags=["todos"])
-async def list_todos(list_id: int, client: Client) -> list[Todo]:
+async def list_todos(list_id: str, client: Client) -> list[Todo]:
     await client.get_todo_list(list_id)
     return await client.list_todos(list_id)
 
 
 @app.post("/todo-lists/{list_id}/items", status_code=201, tags=["todos"])
-async def create_todo(list_id: int, data: TodoCreate, client: Client) -> Todo:
+async def create_todo(list_id: str, data: TodoCreate, client: Client) -> Todo:
     return await client.create_todo(list_id, data)
 
 
 @app.get("/todo-lists/{list_id}/items/{todo_id}", tags=["todos"])
-async def get_todo(list_id: int, todo_id: int, client: Client) -> Todo:
+async def get_todo(list_id: str, todo_id: str, client: Client) -> Todo:
     return await client.get_todo(list_id, todo_id)
 
 
 @app.patch("/todo-lists/{list_id}/items/{todo_id}", tags=["todos"])
-async def update_todo(list_id: int, todo_id: int, data: TodoUpdate, client: Client) -> Todo:
+async def update_todo(list_id: str, todo_id: str, data: TodoUpdate, client: Client) -> Todo:
     return await client.update_todo(list_id, todo_id, data)
 
 
 @app.delete("/todo-lists/{list_id}/items/{todo_id}", status_code=204, tags=["todos"])
-async def delete_todo(list_id: int, todo_id: int, client: Client) -> None:
+async def delete_todo(list_id: str, todo_id: str, client: Client) -> None:
     await client.delete_todo(list_id, todo_id)
