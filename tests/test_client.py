@@ -1,12 +1,19 @@
 import asyncio
 import base64
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
-from conftest import LIST_ID, TODO_ID
+from conftest import CHORE_ID, LIST_ID, TODO_ID
 
 from cozyla.client import CozylaError, NotFoundError, encrypt_password
-from cozyla.models import TodoCreate, TodoListCreate, TodoUpdate
+from cozyla.models import (
+    ChoreCreate,
+    ChoreUpdate,
+    Repeat,
+    TodoCreate,
+    TodoListCreate,
+    TodoUpdate,
+)
 
 
 def test_password_is_rsa_encrypted():
@@ -72,3 +79,43 @@ def test_unset_values_read_as_none(make_client):
 def test_unknown_todo_is_not_found(make_client):
     with pytest.raises(NotFoundError):
         asyncio.run(make_client().update_todo(str(LIST_ID), "999", TodoUpdate(title="x")))
+
+
+def test_chore_lifecycle(cloud, make_client):
+    day = date(2026, 10, 14)
+    weekly = Repeat(frequency="weekly", days=["monday", "wednesday"])
+
+    async def run():
+        client = make_client()
+        chore = await client.create_chore(
+            ChoreCreate(name="Vacuum", icon="broom", members=["m-1"], start=day, repeat=weekly)
+        )
+        updated = await client.update_chore(chore.id, ChoreUpdate(stars=3))
+        await client.set_chore_completed(chore.id, day, "m-1", True)
+        occurrences = await client.list_chore_occurrences(day)
+        await client.delete_chore(chore.id)
+        return chore, updated, occurrences, await client.list_chores()
+
+    chore, updated, occurrences, remaining = asyncio.run(run())
+    assert (chore.repeat, chore.end, chore.members) == (weekly, None, ["m-1"])
+    assert (updated.stars, updated.name, updated.repeat) == (3, "Vacuum", weekly)
+    created = next(body for path, body, _ in cloud.requests if path.endswith("chores/create/v1"))
+    assert (created["repeatsEvery"], created["repeatsIn"], created["repeatsUntil"]) == (
+        "Weekly",
+        "Monday,Wednesday",
+        True,
+    )
+    mine = [o for o in occurrences if o.chore_id == chore.id]
+    assert [(o.member, o.day, o.status, o.stars) for o in mine] == [("m-1", day, "completed", 3)]
+    assert [c.id for c in remaining] == [CHORE_ID]
+
+
+def test_cloud_chore_reads_as_model(make_client):
+    chore = asyncio.run(make_client().get_chore(CHORE_ID))
+    assert (chore.name, chore.type, chore.end, chore.reminder_minutes) == (
+        "Feed pets",
+        "anyone",
+        None,
+        30,
+    )
+    assert chore.repeat == Repeat(frequency="daily")

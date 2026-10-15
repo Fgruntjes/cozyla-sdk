@@ -11,7 +11,8 @@ Cozyla can change that API at any time, and using it may conflict with their ter
 |---|---|
 | Tasks → To-do lists and items | ✅ list, create, update, complete, delete (due dates, reminders, assignees, stars, flags) |
 | Family members (to-do assignees) | ✅ read |
-| Tasks → Chores, Routines, Rewards | planned |
+| Tasks → Chores | ✅ list, create, update, delete, per-day occurrences, complete/reopen per member |
+| Tasks → Routines, Rewards | planned |
 | Meals → Meal plan, Grocery, Pantry | planned |
 | Notes | planned |
 | Calendar | use Cozyla's built-in CalDAV/Google sync and HA's CalDAV integration |
@@ -53,6 +54,11 @@ rest_command:
       Authorization: !secret cozyla_api_bearer
     content_type: application/json
     payload: '{"title": "{{ title }}"}'
+  cozyla_complete_chore:
+    url: "http://cozyla-sdk:8000/chores/{{ chore_id }}/completions/{{ now().date() }}/{{ member_id }}"
+    method: put
+    headers:
+      Authorization: !secret cozyla_api_bearer
 
 rest:
   - resource: http://cozyla-sdk:8000/todo-lists/<list-id>/items

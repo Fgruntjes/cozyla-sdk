@@ -278,6 +278,66 @@ Two body shapes hit the same path:
 ### Offline sync — `POST /cal-server/rewards/todosInfo/offline/syncUpdateTodos`
 `UploadOfflineTodosParam` (batch; not needed online). Also `POST /cal-server/rewards/todosInfo/needNotifiedTodoInfos` returns items due for reminder notification.
 
+## Chores
+
+From `com.cozyla.choresreward` 1.2.8.2026091017: `api/CozylaService.java`, DTOs in `api/` (`NewChoreParam`, `EditChoreParam`, `ChoreCheckParam`, `CozylaChoreTaskBean`, `CozylaChoreBean`). No `@SerializedName` renames; JSON keys equal the field names. Paths are under `/cal-server/rewards/chores/`.
+
+Dates are `yyyy-MM-dd` strings and times `HH:mm` throughout chores and routines; no epoch values in request bodies.
+
+### Schedule fields (shared with routines)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `repeats` | bool | `false` = one-off chore spanning `startDay`..`endDay` (chores only) |
+| `repeatsEvery` | string | `Daily`, `Weekly`, `Monthly` |
+| `repeatsEveryCounts` | int | every N days/weeks/months |
+| `repeatsIn` | string | Daily: `""`; Weekly: full English day names, comma-separated, e.g. `Monday,Wednesday`; Monthly: days of month, e.g. `1,15` |
+| `weekFirstDate` | int | in responses: `0` = weeks start Sunday, `1` = Monday |
+
+### Chore definition
+
+`CozylaChoreTaskBean` (also the create/update response):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `choreUid` | string | id (32 hex chars) |
+| `choreName` | string | at most 50 characters |
+| `icon` | string | e.g. `czl_chores_emoji#_#broom#_#🧹` (`czl_chores_emoji#_#<name>#_#<emoji>`) |
+| `coins` | int | stars per completion |
+| `choreType` | string | `Everyone` (each member does it), `AnyOne` (first to finish), `Rotate` |
+| `rotateEveryCounts` | int | Rotate: switch assignee every N occurrences |
+| `startDay`, `endDay` | string | `endDay` is ignored when `repeats` and `repeatsUntil` are both true |
+| `dueTime` | string | `HH:mm`, app default `23:59` |
+| `repeatsUntil` | bool | `true` = repeats forever |
+| `reminder` | int | minutes before due; `-1` = none; app offers 5/10/30/60/120 |
+| `memberRefs` | list | `{memberUid, memberName, coins, ...}` per assignee |
+| `choreBank` | bool | unassigned chore any member can claim |
+| `choreDeviceId` | string | the app always sends `db3860b5-9178-427a-894e-d9dfed2bcf5b` |
+| `description` | string | |
+
+Also `id` (numeric), `status` (int, meaning unknown), `displayOrder`, `weekFirstDate`, `createDate`/`updateDate` (ISO strings).
+
+| Path | Body (beyond `deviceUid`) | Result |
+|---|---|---|
+| `myChoresV1` | none | all chore definitions |
+| `create/v1` | `NewChoreParam`: the definition fields above minus `choreUid`, with `memberUids: [..]` instead of `memberRefs`, plus `asATemplate: bool` (also save to the chore library) | the created chore |
+| `update/v1` | `EditChoreParam`: the create body minus `asATemplate`, plus `choreUid`; all fields required | the updated chore |
+| `delete/v1` | `{ "choreUid": ".." }` | remaining chores |
+| `choreRecordByDay/v3` | `{ "selectDay": "2026-10-15" }` | one record per member per chore occurring that day |
+| `choreCheck/v1` | see below | none |
+
+Occurrence record (`CozylaChoreBean`): the chore's schedule fields plus `choreMemberRecordUid` (`<choreUid>_<memberUid>_<day>`), `memberUid`, `checkDay`, `choreCoins`, `status` (`pending`, `completed`, `expired`), `checkTimestamp`, `memberRefIds` (comma-separated), `expiredCard`, `nextOccurDay`.
+
+Complete or reopen one member's occurrence (`ChoreCheckParam`):
+
+```json
+{ "choreUid": "..", "memberUid": "..", "checkFrom": "dayPage", "choreStatus": "completed", "checkDay": "2026-10-15", "selectDay": "2026-10-15" }
+```
+
+`choreStatus` is the target state: `completed` or `pending`. `checkFrom` is the UI page (`dayPage`, `weekPage`, `memberPage`, `widget`). For a one-off chore whose `endDay` has passed, the app sends `endDay` as `checkDay`; otherwise `checkDay` is the occurrence day. The server adds the chore's `coins` to the member on completion and takes them back on reopen.
+
+Not used by this project: `chores/detail`, `updateDisplayOrder`, `choreTipByDay`/`choreTipGetIt` (AnyOne compete tips), `choreTemplate/*` (chore library), `chores/batchCreate` (onboarding), `offline/*` sync.
+
 ## Confirmed against the live API
 
 Checked on 2026-10-12 with a real account, logging in as a server (`deviceSn` `cozyla-sdk`).
@@ -293,6 +353,11 @@ Checked on 2026-10-12 with a real account, logging in as a server (`deviceSn` `c
 - `todosList/list` items also carry `todoNum` and `sourceType`; `todosInfo/list` items also carry `todoListTitle`, `memberName`, `assignMemberId`, `headPortrait`, `color`, `virtualDeviceUid`, `showMemberUidList`, `sourceType`.
 - `queryMembers` with `{"app": 1}` returns all family members with `memberUid`, `memberName`, `role`, `color`, `coins`, `memberType` (0 = main account, 1 = family member).
 - Create, update, `checkTodo` (complete and reopen) and delete for items, and create, update and delete for lists, all succeed with the bodies documented above; `update` keeps fields only when they are re-sent.
+
+Checked on 2026-10-15:
+
+- Chore create, update, delete, `choreRecordByDay/v3` and `choreCheck/v1` (complete and reopen) succeed with the bodies documented above; completing awards the chore's stars to the member's `coins` and reopening removes them.
+- `repeatsUntil: true` repeats past `endDay`; `repeatsUntil: false` stops at it.
 
 ## Open questions
 

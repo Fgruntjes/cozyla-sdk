@@ -56,3 +56,27 @@ def test_missing_list_is_404(http):
 def test_cloud_error_is_502(http, cloud):
     cloud.error_code = 500
     assert http.get("/todo-lists", headers=AUTH).status_code == 502
+
+
+def test_chore_completion(http, cloud):
+    created = http.post(
+        "/chores",
+        json={"name": "Vacuum", "icon": "broom", "members": ["m-1"], "start": "2026-10-14"},
+        headers=AUTH,
+    )
+    assert created.status_code == 201
+    chore_id = created.json()["id"]
+
+    completion = f"/chores/{chore_id}/completions/2026-10-14/m-1"
+    assert http.put(completion, headers=AUTH).status_code == 204
+    day = http.get("/chores/occurrences", params={"day": "2026-10-14"}, headers=AUTH).json()
+    assert {(o["chore_id"], o["status"]) for o in day} >= {(chore_id, "completed")}
+
+    assert http.delete(completion, headers=AUTH).status_code == 204
+    assert cloud.chore_checks[(chore_id, "m-1", "2026-10-14")] == "pending"
+
+    assert (
+        http.put(f"/chores/{chore_id}/completions/2026-10-14/m-9", headers=AUTH).status_code == 404
+    )
+    assert http.delete(f"/chores/{chore_id}", headers=AUTH).status_code == 204
+    assert http.get(f"/chores/{chore_id}", headers=AUTH).status_code == 404

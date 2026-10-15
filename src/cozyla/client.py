@@ -1,12 +1,25 @@
 import base64
 import json
-from datetime import datetime
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.serialization import load_der_public_key
 
-from cozyla.models import Member, Todo, TodoCreate, TodoList, TodoListCreate, TodoUpdate
+from cozyla.models import (
+    Chore,
+    ChoreCreate,
+    ChoreOccurrence,
+    ChoreUpdate,
+    Member,
+    Todo,
+    TodoCreate,
+    TodoList,
+    TodoListCreate,
+    TodoUpdate,
+    repeat_to_cloud,
+)
 
 BASE_URL = "https://api.cozylacal.com"
 PASSWORD_KEY = (
@@ -17,6 +30,8 @@ PASSWORD_KEY = (
     "L47457IL354qmJnVEQIDAQAB"
 )
 TOKEN_EXPIRED = {101, 102}
+CHORE_DEVICE_ID = "db3860b5-9178-427a-894e-d9dfed2bcf5b"
+CHORE_TYPES = {"everyone": "Everyone", "anyone": "AnyOne", "rotate": "Rotate"}
 
 
 class CozylaError(Exception):
@@ -66,6 +81,27 @@ def _todo_body(todo: Todo | TodoCreate, list_id: str) -> dict:
     }
 
 
+def _chore_body(chore: Chore | ChoreCreate) -> dict:
+    return {
+        "icon": chore.icon,
+        "choreName": chore.name,
+        "coins": chore.stars,
+        "choreType": CHORE_TYPES[chore.type],
+        "rotateEveryCounts": chore.rotate_every,
+        "startDay": chore.start.isoformat(),
+        "endDay": (chore.end or chore.start).isoformat(),
+        "dueTime": chore.due_time,
+        "repeats": chore.repeat is not None,
+        **repeat_to_cloud(chore.repeat),
+        "repeatsUntil": chore.end is None,
+        "choreDeviceId": CHORE_DEVICE_ID,
+        "reminder": -1 if chore.reminder_minutes is None else chore.reminder_minutes,
+        "memberUids": chore.members,
+        "choreBank": chore.chore_bank,
+        "description": chore.description,
+    }
+
+
 class CozylaClient:
     def __init__(
         self,
@@ -83,6 +119,9 @@ class CozylaClient:
         self._http = httpx.AsyncClient(base_url=base_url, transport=transport, timeout=20)
         self._token: str | None = None
         self._device_uid = ""
+
+    def today(self) -> date:
+        return datetime.now(ZoneInfo(self._timezone)).date()
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -231,3 +270,55 @@ class CozylaClient:
     async def delete_todo(self, list_id: str, todo_id: str) -> None:
         await self.get_todo(list_id, todo_id)
         await self.call("/cal-server/rewards/todosInfo/delete", {"id": int(todo_id)})
+
+    async def list_chores(self) -> list[Chore]:
+        result = await self.call("/cal-server/rewards/chores/myChoresV1")
+        return [Chore.model_validate(c) for c in result or []]
+
+    async def get_chore(self, chore_id: str) -> Chore:
+        for chore in await self.list_chores():
+            if chore.id == chore_id:
+                return chore
+        raise NotFoundError(f"chore {chore_id}")
+
+    async def create_chore(self, data: ChoreCreate) -> Chore:
+        result = await self.call(
+            "/cal-server/rewards/chores/create/v1", {**_chore_body(data), "asATemplate": False}
+        )
+        return Chore.model_validate(result)
+
+    async def update_chore(self, chore_id: str, data: ChoreUpdate) -> Chore:
+        current = await self.get_chore(chore_id)
+        updated = current.model_copy(update=data.model_dump(exclude_unset=True))
+        result = await self.call(
+            "/cal-server/rewards/chores/update/v1", {"choreUid": chore_id, **_chore_body(updated)}
+        )
+        return Chore.model_validate(result)
+
+    async def delete_chore(self, chore_id: str) -> None:
+        await self.get_chore(chore_id)
+        await self.call("/cal-server/rewards/chores/delete/v1", {"choreUid": chore_id})
+
+    async def list_chore_occurrences(self, day: date) -> list[ChoreOccurrence]:
+        result = await self.call(
+            "/cal-server/rewards/chores/choreRecordByDay/v3", {"selectDay": day.isoformat()}
+        )
+        return [ChoreOccurrence.model_validate(r) for r in result or []]
+
+    async def set_chore_completed(
+        self, chore_id: str, day: date, member_id: str, completed: bool
+    ) -> None:
+        occurrences = await self.list_chore_occurrences(day)
+        if not any(o.chore_id == chore_id and o.member == member_id for o in occurrences):
+            raise NotFoundError(f"chore {chore_id} for member {member_id} on {day}")
+        await self.call(
+            "/cal-server/rewards/chores/choreCheck/v1",
+            {
+                "choreUid": chore_id,
+                "memberUid": member_id,
+                "checkFrom": "dayPage",
+                "choreStatus": "completed" if completed else "pending",
+                "checkDay": day.isoformat(),
+                "selectDay": day.isoformat(),
+            },
+        )

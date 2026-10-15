@@ -1,6 +1,7 @@
 import os
 import secrets
 from contextlib import asynccontextmanager
+from datetime import date
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
@@ -9,6 +10,10 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from cozyla.client import CozylaClient, CozylaError, NotFoundError
 from cozyla.models import (
+    Chore,
+    ChoreCreate,
+    ChoreOccurrence,
+    ChoreUpdate,
     Member,
     Todo,
     TodoCreate,
@@ -38,7 +43,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Cozyla SDK",
-    description="Unofficial REST API for the Cozyla Calendar 2+ cloud (to-dos, members).",
+    description="Unofficial REST API for the Cozyla Calendar 2+ cloud (to-dos, chores, members).",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -133,3 +138,43 @@ async def update_todo(list_id: str, todo_id: str, data: TodoUpdate, client: Clie
 @app.delete("/todo-lists/{list_id}/items/{todo_id}", status_code=204, tags=["todos"])
 async def delete_todo(list_id: str, todo_id: str, client: Client) -> None:
     await client.delete_todo(list_id, todo_id)
+
+
+@app.get("/chores", tags=["chores"])
+async def list_chores(client: Client) -> list[Chore]:
+    return await client.list_chores()
+
+
+@app.post("/chores", status_code=201, tags=["chores"])
+async def create_chore(data: ChoreCreate, client: Client) -> Chore:
+    return await client.create_chore(data)
+
+
+@app.get("/chores/occurrences", tags=["chores"])
+async def list_chore_occurrences(client: Client, day: date | None = None) -> list[ChoreOccurrence]:
+    return await client.list_chore_occurrences(day or client.today())
+
+
+@app.get("/chores/{chore_id}", tags=["chores"])
+async def get_chore(chore_id: str, client: Client) -> Chore:
+    return await client.get_chore(chore_id)
+
+
+@app.patch("/chores/{chore_id}", tags=["chores"])
+async def update_chore(chore_id: str, data: ChoreUpdate, client: Client) -> Chore:
+    return await client.update_chore(chore_id, data)
+
+
+@app.delete("/chores/{chore_id}", status_code=204, tags=["chores"])
+async def delete_chore(chore_id: str, client: Client) -> None:
+    await client.delete_chore(chore_id)
+
+
+@app.put("/chores/{chore_id}/completions/{day}/{member_id}", status_code=204, tags=["chores"])
+async def complete_chore(chore_id: str, day: date, member_id: str, client: Client) -> None:
+    await client.set_chore_completed(chore_id, day, member_id, True)
+
+
+@app.delete("/chores/{chore_id}/completions/{day}/{member_id}", status_code=204, tags=["chores"])
+async def uncomplete_chore(chore_id: str, day: date, member_id: str, client: Client) -> None:
+    await client.set_chore_completed(chore_id, day, member_id, False)

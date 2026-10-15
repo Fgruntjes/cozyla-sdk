@@ -7,6 +7,7 @@ from cozyla.client import CozylaClient
 
 LIST_ID = 2105009974451359744
 TODO_ID = 2105029434214182912
+CHORE_ID = "c0ffee00000000000000000000000001"
 
 
 class FakeCloud:
@@ -38,6 +39,29 @@ class FakeCloud:
                 "createTime": 1760000000000,
             }
         }
+        self.chores = {
+            CHORE_ID: {
+                "choreUid": CHORE_ID,
+                "choreName": "Feed pets",
+                "icon": "czl_chores_emoji#_#bone#_#🦴",
+                "coins": 5,
+                "choreType": "AnyOne",
+                "rotateEveryCounts": 1,
+                "startDay": "2026-10-12",
+                "endDay": "2026-11-12",
+                "dueTime": "16:00",
+                "repeats": True,
+                "repeatsEvery": "Daily",
+                "repeatsEveryCounts": 1,
+                "repeatsIn": "",
+                "repeatsUntil": True,
+                "reminder": 30,
+                "memberRefs": [{"memberUid": "m-1", "coins": 5}],
+                "choreBank": False,
+                "description": "",
+            }
+        }
+        self.chore_checks: dict[tuple[str, str, str], str] = {}
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -94,6 +118,45 @@ class FakeCloud:
 
     def rewards_todosInfo_delete(self, body):
         del self.todos[body["id"]]
+
+    def rewards_chores_myChoresV1(self, body):
+        return list(self.chores.values())
+
+    def store_chore(self, body):
+        chore = {k: v for k, v in body.items() if k not in ("memberUids", "asATemplate")}
+        chore["memberRefs"] = [{"memberUid": m} for m in body["memberUids"]]
+        self.chores[chore["choreUid"]] = chore
+        return chore
+
+    def rewards_chores_create_v1(self, body):
+        return self.store_chore({**body, "choreUid": f"c{len(self.chores):031d}"})
+
+    def rewards_chores_update_v1(self, body):
+        return self.store_chore(body)
+
+    def rewards_chores_delete_v1(self, body):
+        del self.chores[body["choreUid"]]
+        return list(self.chores.values())
+
+    def rewards_chores_choreRecordByDay_v3(self, body):
+        day = body["selectDay"]
+        return [
+            {
+                **chore,
+                "memberUid": ref["memberUid"],
+                "checkDay": day,
+                "choreCoins": chore["coins"],
+                "status": self.chore_checks.get((uid, ref["memberUid"], day), "pending"),
+            }
+            for uid, chore in self.chores.items()
+            for ref in chore["memberRefs"]
+            if chore["startDay"] <= day
+        ]
+
+    def rewards_chores_choreCheck_v1(self, body):
+        assert body["checkDay"] == body["selectDay"]
+        key = (body["choreUid"], body["memberUid"], body["checkDay"])
+        self.chore_checks[key] = body["choreStatus"]
 
 
 @pytest.fixture
