@@ -1,11 +1,19 @@
-from datetime import datetime
-from typing import Annotated
+from datetime import date, datetime
+from typing import Annotated, Literal
 
-from pydantic import AliasChoices, BaseModel, BeforeValidator, Field
+from pydantic import AliasChoices, BaseModel, BeforeValidator, Field, model_validator
 
 
 def _unset_to_none(value):
     return None if value is None or (isinstance(value, int) and value < 0) else value
+
+
+def _lower(value):
+    return value.lower() if isinstance(value, str) else value
+
+
+def _member_ids(refs):
+    return [ref["memberUid"] for ref in refs or []]
 
 
 Id = Annotated[str, BeforeValidator(str)]
@@ -87,3 +95,240 @@ class Todo(BaseModel):
     display_order: float | None = Field(
         None, validation_alias=_alias("displayOrder", "display_order")
     )
+
+
+class Repeat(BaseModel):
+    frequency: Literal["daily", "weekly", "monthly"] = "daily"
+    interval: int = Field(1, ge=1, description="Every this many days, weeks or months")
+    days: list[str] = Field(
+        [],
+        examples=[["monday", "wednesday"]],
+        description="Weekday names for weekly, days of the month for monthly",
+    )
+
+
+def repeat_from_cloud(schedule: dict) -> Repeat | None:
+    if not schedule.get("repeats", True):
+        return None
+    return Repeat(
+        frequency=schedule["repeatsEvery"].lower(),
+        interval=schedule.get("repeatsEveryCounts") or 1,
+        days=[day.lower() for day in (schedule.get("repeatsIn") or "").split(",") if day],
+    )
+
+
+def repeat_to_cloud(repeat: Repeat | None) -> dict:
+    repeat = repeat or Repeat()
+    return {
+        "repeatsEvery": repeat.frequency.capitalize(),
+        "repeatsEveryCounts": repeat.interval,
+        "repeatsIn": ",".join(day.capitalize() for day in repeat.days),
+    }
+
+
+class Repeating(BaseModel):
+    @model_validator(mode="before")
+    @classmethod
+    def _read_cloud_repeat(cls, data):
+        if isinstance(data, dict) and "repeatsEvery" in data:
+            return {**data, "repeat": repeat_from_cloud(data)}
+        return data
+
+
+ChoreType = Literal["everyone", "anyone", "rotate"]
+ChoreStatus = Literal["pending", "completed", "expired"]
+
+
+class ChoreCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=50)
+    icon: str = Field(examples=["czl_chores_emoji#_#broom#_#\N{BROOM}"])
+    members: list[str] = Field([], description="Member ids, see GET /members")
+    type: ChoreType = Field(
+        "everyone",
+        description="everyone: each member does it; anyone: first to finish; rotate: take turns",
+    )
+    rotate_every: int = Field(1, ge=1, description="Rotate the assignee every this many times")
+    chore_bank: bool = Field(False, description="Unassigned chore any member can claim")
+    stars: int = Field(1, ge=0, description="Stars earned per completion")
+    start: date | None = Field(None, description="First day; default today")
+    end: date | None = Field(None, description="Last day; none repeats forever")
+    due_time: str = Field("23:59", pattern=r"^\d{2}:\d{2}$")
+    repeat: Repeat | None = Field(None, description="None is a one-off chore from start to end")
+    reminder_minutes: int | None = Field(None, ge=0)
+    description: str = ""
+
+
+class ChoreUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=50)
+    icon: str | None = None
+    members: list[str] | None = None
+    type: ChoreType | None = None
+    rotate_every: int | None = Field(None, ge=1)
+    chore_bank: bool | None = None
+    stars: int | None = Field(None, ge=0)
+    start: date | None = None
+    end: date | None = None
+    due_time: str | None = Field(None, pattern=r"^\d{2}:\d{2}$")
+    repeat: Repeat | None = None
+    reminder_minutes: int | None = Field(None, ge=0)
+    description: str | None = None
+
+
+class Chore(Repeating):
+    id: str = Field(validation_alias=_alias("choreUid", "id"))
+    name: str = Field(validation_alias=_alias("choreName", "name"))
+    icon: str
+    members: list[str] = Field([], validation_alias=_alias("memberRefs", "members"))
+    type: Annotated[ChoreType, BeforeValidator(_lower)] = Field(
+        validation_alias=_alias("choreType", "type")
+    )
+    rotate_every: int = Field(1, validation_alias=_alias("rotateEveryCounts", "rotate_every"))
+    chore_bank: bool = Field(False, validation_alias=_alias("choreBank", "chore_bank"))
+    stars: int = Field(validation_alias=_alias("coins", "stars"))
+    start: date = Field(validation_alias=_alias("startDay", "start"))
+    end: date | None = Field(None, validation_alias=_alias("endDay", "end"))
+    due_time: str = Field(validation_alias=_alias("dueTime", "due_time"))
+    reminder_minutes: Minutes = Field(None, validation_alias=_alias("reminder", "reminder_minutes"))
+    repeat: Repeat | None = None
+    description: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _read_cloud_chore(cls, data):
+        if isinstance(data, dict) and "choreUid" in data:
+            data = {
+                **data,
+                "memberRefs": _member_ids(data.get("memberRefs")),
+                "description": data.get("description") or "",
+            }
+            if data.get("repeats") and data.get("repeatsUntil"):
+                data["endDay"] = None
+        return data
+
+
+class ChoreOccurrence(BaseModel):
+    chore_id: str = Field(validation_alias=_alias("choreUid", "chore_id"))
+    member: str = Field(validation_alias=_alias("memberUid", "member"))
+    day: date = Field(validation_alias=_alias("checkDay", "day"))
+    name: str = Field(validation_alias=_alias("choreName", "name"))
+    icon: str = ""
+    stars: int = Field(validation_alias=_alias("choreCoins", "stars"))
+    due_time: str = Field(validation_alias=_alias("dueTime", "due_time"))
+    status: ChoreStatus
+
+
+RoutinePeriod = Literal["morning", "afternoon", "evening"]
+
+
+class RoutineCreate(BaseModel):
+    members: list[str] = Field(min_length=1, description="One routine is created per member")
+    name: str = Field(min_length=1)
+    icon: str = Field(examples=["routine_property_bed"])
+    period: RoutinePeriod
+    stars: int = Field(1, ge=0, description="Stars earned per completion")
+    repeat: Repeat = Repeat()
+    start: date | None = Field(None, description="First day; default today")
+    description: str = ""
+    habit_enabled: bool = False
+    habit_bonus_stars: int = Field(0, ge=0)
+
+
+class RoutineUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1)
+    icon: str | None = None
+    period: RoutinePeriod | None = None
+    stars: int | None = Field(None, ge=0)
+    repeat: Repeat | None = None
+    start: date | None = None
+    description: str | None = None
+    habit_enabled: bool | None = None
+    habit_bonus_stars: int | None = Field(None, ge=0)
+
+
+Period = Annotated[RoutinePeriod, BeforeValidator(_lower)]
+
+
+class Routine(Repeating):
+    id: Id
+    member: str = Field(validation_alias=_alias("memberUid", "member"))
+    name: str = Field(validation_alias=_alias("routineTitle", "name"))
+    icon: str = Field("", validation_alias=_alias("routineIcon", "icon"))
+    period: Period = Field(validation_alias=_alias("routineType", "period"))
+    stars: int = Field(validation_alias=_alias("coins", "stars"))
+    repeat: Repeat
+    start: date = Field(validation_alias=_alias("startDay", "start"))
+    description: str = ""
+    habit_enabled: bool = Field(False, validation_alias=_alias("habitEnabled", "habit_enabled"))
+    habit_bonus_stars: int = Field(
+        0, validation_alias=_alias("habitBonusStars", "habit_bonus_stars")
+    )
+
+
+class RoutineOccurrence(BaseModel):
+    routine_id: Id = Field(validation_alias=_alias("routineId", "routine_id"))
+    member: str = Field(validation_alias=_alias("memberUid", "member"))
+    day: date = Field(validation_alias=_alias("checkDay", "day"))
+    period: Period = Field(validation_alias=_alias("routineType", "period"))
+    name: str = Field(validation_alias=_alias("routineTitle", "name"))
+    icon: str | None = Field(None, validation_alias=_alias("routineIcon", "icon"))
+    stars: int = Field(validation_alias=_alias("coins", "stars"))
+    status: Literal["pending", "completed"]
+    week_start: int = Field(1, validation_alias=_alias("weekFirstDate", "week_start"), exclude=True)
+
+
+class RewardCreate(BaseModel):
+    name: str = Field(min_length=1)
+    stars: int = Field(ge=0, description="Stars a member spends to redeem it")
+    members: list[str] = Field(min_length=1, description="Member ids who can redeem it")
+    description: str = ""
+    icon: str = "czl_reward_gift"
+    repeatable: bool = Field(False, description="Can be redeemed again after redemption")
+    needs_approval: bool = Field(False, description="A parent approves each redemption")
+    link: str = ""
+
+
+class RewardUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1)
+    stars: int | None = Field(None, ge=0)
+    members: list[str] | None = Field(None, min_length=1)
+    description: str | None = None
+    icon: str | None = None
+    repeatable: bool | None = None
+    needs_approval: bool | None = None
+    link: str | None = None
+
+
+class Reward(BaseModel):
+    id: str = Field(validation_alias=_alias("rewardUid", "id"))
+    name: str
+    stars: int = Field(validation_alias=_alias("coins", "stars"))
+    members: Annotated[list[str], BeforeValidator(_member_ids)]
+    description: str = ""
+    icon: str = ""
+    repeatable: bool = Field(False, validation_alias=_alias("renewable", "repeatable"))
+    needs_approval: bool = Field(False, validation_alias=_alias("approval", "needs_approval"))
+    link: str = ""
+    product_id: Annotated[str, BeforeValidator(lambda value: str(value or ""))] = Field(
+        "", validation_alias=_alias("productId", "product_id"), exclude=True
+    )
+
+
+REDEMPTION_STATUSES = {"WAIT_APPROVE": "pending_approval", "ALREADY": "approved", "DONE": "done"}
+RedemptionStatus = Literal["pending_approval", "approved", "done"]
+
+
+class RedemptionCreate(BaseModel):
+    member: str = Field(description="Member id who spends the stars")
+
+
+class Redemption(BaseModel):
+    id: str = Field(validation_alias=_alias("rewardMemberRecordUid", "id"))
+    reward_id: str = Field(validation_alias=_alias("rewardUid", "reward_id"))
+    member: str = Field(validation_alias=_alias("memberUid", "member"))
+    name: str
+    stars: int = Field(validation_alias=_alias("coins", "stars"))
+    status: Annotated[
+        RedemptionStatus,
+        BeforeValidator(lambda status: REDEMPTION_STATUSES.get(status, status)),
+    ] = Field(validation_alias=_alias("rewardStatus", "status"))
+    updated_at: EpochMs = Field(None, validation_alias=_alias("updateDateTimestamp", "updated_at"))
