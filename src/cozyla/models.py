@@ -8,6 +8,10 @@ def _unset_to_none(value):
     return None if value is None or (isinstance(value, int) and value < 0) else value
 
 
+def _lower(value):
+    return value.lower() if isinstance(value, str) else value
+
+
 Id = Annotated[str, BeforeValidator(str)]
 EpochMs = Annotated[datetime | None, BeforeValidator(_unset_to_none)]
 Minutes = Annotated[int | None, BeforeValidator(_unset_to_none)]
@@ -171,7 +175,9 @@ class Chore(Repeating):
     name: str = Field(validation_alias=_alias("choreName", "name"))
     icon: str
     members: list[str] = Field([], validation_alias=_alias("memberRefs", "members"))
-    type: ChoreType = Field(validation_alias=_alias("choreType", "type"))
+    type: Annotated[ChoreType, BeforeValidator(_lower)] = Field(
+        validation_alias=_alias("choreType", "type")
+    )
     rotate_every: int = Field(1, validation_alias=_alias("rotateEveryCounts", "rotate_every"))
     chore_bank: bool = Field(False, validation_alias=_alias("choreBank", "chore_bank"))
     stars: int = Field(validation_alias=_alias("coins", "stars"))
@@ -188,7 +194,6 @@ class Chore(Repeating):
         if isinstance(data, dict) and "choreUid" in data:
             data = {
                 **data,
-                "choreType": data["choreType"].lower(),
                 "memberRefs": [ref["memberUid"] for ref in data.get("memberRefs") or []],
                 "description": data.get("description") or "",
             }
@@ -206,3 +211,62 @@ class ChoreOccurrence(BaseModel):
     stars: int = Field(validation_alias=_alias("choreCoins", "stars"))
     due_time: str = Field(validation_alias=_alias("dueTime", "due_time"))
     status: ChoreStatus
+
+
+RoutinePeriod = Literal["morning", "afternoon", "evening"]
+
+
+class RoutineCreate(BaseModel):
+    members: list[str] = Field(min_length=1, description="One routine is created per member")
+    name: str = Field(min_length=1)
+    icon: str = Field(examples=["routine_property_bed"])
+    period: RoutinePeriod
+    stars: int = Field(1, ge=0, description="Stars earned per completion")
+    repeat: Repeat = Repeat()
+    start: date = Field(default_factory=date.today)
+    description: str = ""
+    habit_enabled: bool = False
+    habit_bonus_stars: int = Field(0, ge=0)
+
+
+class RoutineUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1)
+    icon: str | None = None
+    period: RoutinePeriod | None = None
+    stars: int | None = Field(None, ge=0)
+    repeat: Repeat | None = None
+    start: date | None = None
+    description: str | None = None
+    habit_enabled: bool | None = None
+    habit_bonus_stars: int | None = Field(None, ge=0)
+
+
+Period = Annotated[RoutinePeriod, BeforeValidator(_lower)]
+
+
+class Routine(Repeating):
+    id: Id
+    member: str = Field(validation_alias=_alias("memberUid", "member"))
+    name: str = Field(validation_alias=_alias("routineTitle", "name"))
+    icon: str = Field("", validation_alias=_alias("routineIcon", "icon"))
+    period: Period = Field(validation_alias=_alias("routineType", "period"))
+    stars: int = Field(validation_alias=_alias("coins", "stars"))
+    repeat: Repeat
+    start: date = Field(validation_alias=_alias("startDay", "start"))
+    description: str = Field("", validation_alias=_alias("description", "description"))
+    habit_enabled: bool = Field(False, validation_alias=_alias("habitEnabled", "habit_enabled"))
+    habit_bonus_stars: int = Field(
+        0, validation_alias=_alias("habitBonusStars", "habit_bonus_stars")
+    )
+
+
+class RoutineOccurrence(BaseModel):
+    routine_id: Id = Field(validation_alias=_alias("routineId", "routine_id"))
+    member: str = Field(validation_alias=_alias("memberUid", "member"))
+    day: date = Field(validation_alias=_alias("checkDay", "day"))
+    period: Period = Field(validation_alias=_alias("routineType", "period"))
+    name: str = Field(validation_alias=_alias("routineTitle", "name"))
+    icon: str | None = Field(None, validation_alias=_alias("routineIcon", "icon"))
+    stars: int = Field(validation_alias=_alias("coins", "stars"))
+    status: Literal["pending", "completed"]
+    week_start: int = Field(1, validation_alias=_alias("weekFirstDate", "week_start"), exclude=True)

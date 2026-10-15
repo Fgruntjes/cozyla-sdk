@@ -8,6 +8,7 @@ from cozyla.client import CozylaClient
 LIST_ID = 2105009974451359744
 TODO_ID = 2105029434214182912
 CHORE_ID = "c0ffee00000000000000000000000001"
+ROUTINE_ID = 1516579
 
 
 class FakeCloud:
@@ -62,6 +63,26 @@ class FakeCloud:
             }
         }
         self.chore_checks: dict[tuple[str, str, str], str] = {}
+        self.routines = {
+            ROUTINE_ID: {
+                "id": ROUTINE_ID,
+                "memberUid": "m-1",
+                "routineType": "Morning",
+                "routineTitle": "Make the bed",
+                "routineIcon": "routine_property_bed",
+                "coins": 1,
+                "repeatsEvery": "Daily",
+                "repeatsEveryCounts": 1,
+                "repeatsIn": "",
+                "startDay": "2026-10-11",
+                "endDay": None,
+                "description": "",
+                "habitEnabled": 0,
+                "habitBonusStars": 3,
+                "weekFirstDate": 1,
+            }
+        }
+        self.routine_checks: dict[tuple[int, str], str] = {}
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -157,6 +178,48 @@ class FakeCloud:
         assert body["checkDay"] == body["selectDay"]
         key = (body["choreUid"], body["memberUid"], body["checkDay"])
         self.chore_checks[key] = body["choreStatus"]
+
+    def rewards_routineUser_getRoutineList_v1(self, body):
+        return list(self.routines.values())
+
+    def rewards_routineUser_createRoutine(self, body):
+        created = []
+        for member in body["memberUids"]:
+            routine_id = max(self.routines) + 1
+            fields = {k: v for k, v in body.items() if k not in ("memberUids", "asATemplate")}
+            self.routines[routine_id] = {
+                **fields,
+                "id": routine_id,
+                "memberUid": member,
+                "weekFirstDate": 1,
+            }
+            created.append({"routineId": routine_id, "memberUid": member})
+        return created
+
+    def rewards_routineUser_updateRoutine(self, body):
+        assert body["toDay"]
+        self.routines[body["id"]].update({k: v for k, v in body.items() if k != "toDay"})
+
+    def rewards_routineUser_delRoutine(self, body):
+        assert body["toDay"]
+        del self.routines[body["id"]]
+
+    def rewards_routineUserRecord_getRoutineRecordByDay_v1(self, body):
+        day = body["selectDay"]
+        return [
+            {
+                **routine,
+                "routineId": routine_id,
+                "checkDay": day,
+                "status": self.routine_checks.get((routine_id, day), "pending"),
+            }
+            for routine_id, routine in self.routines.items()
+            if routine["startDay"] <= day
+        ]
+
+    def rewards_routineUserRecord_checkUserRoutine(self, body):
+        assert body["weekFirstDate"] == 1
+        self.routine_checks[(body["routineId"], body["checkDay"])] = body["status"]
 
 
 @pytest.fixture

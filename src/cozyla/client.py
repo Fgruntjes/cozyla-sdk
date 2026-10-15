@@ -13,6 +13,10 @@ from cozyla.models import (
     ChoreOccurrence,
     ChoreUpdate,
     Member,
+    Routine,
+    RoutineCreate,
+    RoutineOccurrence,
+    RoutineUpdate,
     Todo,
     TodoCreate,
     TodoList,
@@ -99,6 +103,20 @@ def _chore_body(chore: Chore | ChoreCreate) -> dict:
         "memberUids": chore.members,
         "choreBank": chore.chore_bank,
         "description": chore.description,
+    }
+
+
+def _routine_body(routine: Routine | RoutineCreate) -> dict:
+    return {
+        "routineTitle": routine.name,
+        "routineType": routine.period.capitalize(),
+        "routineIcon": routine.icon,
+        "coins": routine.stars,
+        "habitBonusStars": routine.habit_bonus_stars,
+        "habitEnabled": int(routine.habit_enabled),
+        **repeat_to_cloud(routine.repeat),
+        "startDay": routine.start.isoformat(),
+        "description": routine.description,
     }
 
 
@@ -320,5 +338,65 @@ class CozylaClient:
                 "choreStatus": "completed" if completed else "pending",
                 "checkDay": day.isoformat(),
                 "selectDay": day.isoformat(),
+            },
+        )
+
+    async def list_routines(self) -> list[Routine]:
+        result = await self.call(
+            "/cal-server/rewards/routineUser/getRoutineList/v1",
+            {"memberUids": [], "routineType": ""},
+        )
+        return [Routine.model_validate(r) for r in result or []]
+
+    async def get_routine(self, routine_id: str) -> Routine:
+        for routine in await self.list_routines():
+            if routine.id == routine_id:
+                return routine
+        raise NotFoundError(f"routine {routine_id}")
+
+    async def create_routines(self, data: RoutineCreate) -> list[Routine]:
+        result = await self.call(
+            "/cal-server/rewards/routineUser/createRoutine",
+            {**_routine_body(data), "memberUids": data.members, "asATemplate": False},
+        )
+        created = {str(r["routineId"]) for r in result or []}
+        return [r for r in await self.list_routines() if r.id in created]
+
+    async def update_routine(self, routine_id: str, data: RoutineUpdate) -> Routine:
+        current = await self.get_routine(routine_id)
+        updated = current.model_copy(update=data.model_dump(exclude_unset=True))
+        await self.call(
+            "/cal-server/rewards/routineUser/updateRoutine",
+            {"id": int(routine_id), "toDay": self.today().isoformat(), **_routine_body(updated)},
+        )
+        return await self.get_routine(routine_id)
+
+    async def delete_routine(self, routine_id: str) -> None:
+        await self.get_routine(routine_id)
+        await self.call(
+            "/cal-server/rewards/routineUser/delRoutine",
+            {"id": int(routine_id), "toDay": self.today().isoformat()},
+        )
+
+    async def list_routine_occurrences(self, day: date) -> list[RoutineOccurrence]:
+        result = await self.call(
+            "/cal-server/rewards/routineUserRecord/getRoutineRecordByDay/v1",
+            {"selectDay": day.isoformat(), "memberUids": []},
+        )
+        return [RoutineOccurrence.model_validate(r) for r in result or []]
+
+    async def set_routine_completed(self, routine_id: str, day: date, completed: bool) -> None:
+        for occurrence in await self.list_routine_occurrences(day):
+            if occurrence.routine_id == routine_id:
+                break
+        else:
+            raise NotFoundError(f"routine {routine_id} on {day}")
+        await self.call(
+            "/cal-server/rewards/routineUserRecord/checkUserRoutine",
+            {
+                "routineId": int(routine_id),
+                "checkDay": day.isoformat(),
+                "status": "completed" if completed else "pending",
+                "weekFirstDate": occurrence.week_start,
             },
         )

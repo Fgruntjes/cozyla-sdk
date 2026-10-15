@@ -3,13 +3,15 @@ import base64
 from datetime import UTC, date, datetime
 
 import pytest
-from conftest import CHORE_ID, LIST_ID, TODO_ID
+from conftest import CHORE_ID, LIST_ID, ROUTINE_ID, TODO_ID
 
 from cozyla.client import CozylaError, NotFoundError, encrypt_password
 from cozyla.models import (
     ChoreCreate,
     ChoreUpdate,
     Repeat,
+    RoutineCreate,
+    RoutineUpdate,
     TodoCreate,
     TodoListCreate,
     TodoUpdate,
@@ -119,3 +121,38 @@ def test_cloud_chore_reads_as_model(make_client):
         30,
     )
     assert chore.repeat == Repeat(frequency="daily")
+
+
+def test_routine_lifecycle(cloud, make_client):
+    day = date(2026, 10, 14)
+
+    async def run():
+        client = make_client()
+        created = await client.create_routines(
+            RoutineCreate(
+                members=["m-1", "m-2"],
+                name="Brush teeth",
+                icon="tooth",
+                period="evening",
+                start=day,
+            )
+        )
+        routine = created[1]
+        updated = await client.update_routine(routine.id, RoutineUpdate(stars=2))
+        await client.set_routine_completed(routine.id, day, True)
+        occurrences = await client.list_routine_occurrences(day)
+        await client.delete_routine(routine.id)
+        return created, updated, occurrences, await client.list_routines()
+
+    created, updated, occurrences, remaining = asyncio.run(run())
+    assert [(r.member, r.period, r.repeat) for r in created] == [
+        ("m-1", "evening", Repeat()),
+        ("m-2", "evening", Repeat()),
+    ]
+    assert (updated.name, updated.stars) == ("Brush teeth", 2)
+    stored = cloud.routines[int(created[0].id)]
+    assert (stored["routineType"], stored["repeatsEvery"]) == ("Evening", "Daily")
+    statuses = {(o.routine_id, o.status) for o in occurrences}
+    assert (created[1].id, "completed") in statuses
+    assert (created[0].id, "pending") in statuses
+    assert [r.id for r in remaining] == [str(ROUTINE_ID), created[0].id]

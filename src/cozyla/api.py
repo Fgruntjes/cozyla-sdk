@@ -15,6 +15,10 @@ from cozyla.models import (
     ChoreOccurrence,
     ChoreUpdate,
     Member,
+    Routine,
+    RoutineCreate,
+    RoutineOccurrence,
+    RoutineUpdate,
     Todo,
     TodoCreate,
     TodoList,
@@ -43,7 +47,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Cozyla SDK",
-    description="Unofficial REST API for the Cozyla Calendar 2+ cloud (to-dos, chores, members).",
+    description="Unofficial REST API for the Cozyla Calendar 2+ cloud.",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -178,3 +182,45 @@ async def complete_chore(chore_id: str, day: date, member_id: str, client: Clien
 @app.delete("/chores/{chore_id}/completions/{day}/{member_id}", status_code=204, tags=["chores"])
 async def uncomplete_chore(chore_id: str, day: date, member_id: str, client: Client) -> None:
     await client.set_chore_completed(chore_id, day, member_id, False)
+
+
+@app.get("/routines", tags=["routines"])
+async def list_routines(client: Client) -> list[Routine]:
+    return await client.list_routines()
+
+
+@app.post("/routines", status_code=201, tags=["routines"])
+async def create_routines(data: RoutineCreate, client: Client) -> list[Routine]:
+    return await client.create_routines(data)
+
+
+@app.get("/routines/occurrences", tags=["routines"])
+async def list_routine_occurrences(
+    client: Client, day: date | None = None
+) -> list[RoutineOccurrence]:
+    return await client.list_routine_occurrences(day or client.today())
+
+
+@app.get("/routines/{routine_id}", tags=["routines"])
+async def get_routine(routine_id: str, client: Client) -> Routine:
+    return await client.get_routine(routine_id)
+
+
+@app.patch("/routines/{routine_id}", tags=["routines"])
+async def update_routine(routine_id: str, data: RoutineUpdate, client: Client) -> Routine:
+    return await client.update_routine(routine_id, data)
+
+
+@app.delete("/routines/{routine_id}", status_code=204, tags=["routines"])
+async def delete_routine(routine_id: str, client: Client) -> None:
+    await client.delete_routine(routine_id)
+
+
+@app.put("/routines/{routine_id}/completions/{day}", status_code=204, tags=["routines"])
+async def complete_routine(routine_id: str, day: date, client: Client) -> None:
+    await client.set_routine_completed(routine_id, day, True)
+
+
+@app.delete("/routines/{routine_id}/completions/{day}", status_code=204, tags=["routines"])
+async def uncomplete_routine(routine_id: str, day: date, client: Client) -> None:
+    await client.set_routine_completed(routine_id, day, False)

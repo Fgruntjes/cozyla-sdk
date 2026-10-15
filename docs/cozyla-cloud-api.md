@@ -338,6 +338,42 @@ Complete or reopen one member's occurrence (`ChoreCheckParam`):
 
 Not used by this project: `chores/detail`, `updateDisplayOrder`, `choreTipByDay`/`choreTipGetIt` (AnyOne compete tips), `choreTemplate/*` (chore library), `chores/batchCreate` (onboarding), `offline/*` sync.
 
+## Routines
+
+From `com.cozyla.choresreward` 1.2.8.2026091017: `api/CozylaService.java`, DTOs in `api/v1_1_2/` (`CreateRoutineStepParam`, `UpdateRoutineStepParam`, `RoutineRecordCheckParam`) and `db/userroutine/`. Paths are under `/cal-server/rewards/`. Chores and routines share no endpoints or ids; they share only the schedule fields above.
+
+A routine belongs to one member. Creating a routine for several members creates one routine each.
+
+Routine (`UserRoutineStepNetBean`):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | int | routine id |
+| `memberUid` | string | owner |
+| `routineTitle`, `routineIcon` | string | icon key, e.g. `routine_property_bed` |
+| `routineType` | string | `Morning`, `Afternoon`, `Evening` |
+| `coins` | int | stars per completion |
+| `repeatsEvery`, `repeatsEveryCounts`, `repeatsIn` | | schedule, as for chores; always repeating |
+| `startDay` | string | `endDay` is `null` |
+| `description` | string | |
+| `habitEnabled`, `habitBonusStars` | int | habit tracking (0/1) and its bonus; `habitMilestones` lists the streak milestones (`[3, 7, 21, 66, 100]`) |
+| `weekFirstDate` | int | `0` = Sunday, `1` = Monday |
+
+| Path | Body (beyond `deviceUid`) | Result |
+|---|---|---|
+| `routineUser/getRoutineList/v1` | `{ "memberUids": [], "routineType": "" }` (empty = all) | routines |
+| `routineUser/createRoutine` | `memberUids`, `routineTitle`, `routineType`, `routineIcon`, `coins`, `habitBonusStars`, `habitEnabled`, `repeatsEvery`, `repeatsEveryCounts`, `repeatsIn`, `startDay`, `asATemplate`, `description`; all required | `[{ "routineId": .., "memberId": .., "memberUid": "..", "routineTemplateId": .. }]` |
+| `routineUser/updateRoutine` | create body minus `memberUids`/`asATemplate`, plus `id` and `toDay` (today; the edit applies from that day) | none |
+| `routineUser/delRoutine` | `{ "id": 123, "toDay": "2026-10-15" }` | none |
+| `routineUserRecord/getRoutineRecordByDay/v1` | `{ "selectDay": "2026-10-15", "memberUids": [] }` | one record per routine occurring that day |
+| `routineUserRecord/checkUserRoutine` | `{ "routineId": 123, "checkDay": "2026-10-15", "status": "completed", "weekFirstDate": 1 }` | none |
+
+Occurrence record (`RoutineRecordNetBean`): `routineId`, `memberUid`, `routineType`, `status` (`pending`, `completed`), `checkDay`, `routineTitle`, `routineIcon`, `coins`, the schedule fields, habit counters and `weekFirstDate`. `checkUserRoutine` sets `status` to `completed` or `pending`; the server adds or removes the routine's `coins` on the member.
+
+The app uses `getRoutineList/v2` instead of `v1` when the account setting `reward:habit` is `"0"`.
+
+Not used by this project: `routineUser/updateDisplayOrder`, `routineUser/createBathRoutine` (onboarding), `routineUserRecord/getRoutineRecordByScope` (date range), `routineTemplate/*` (routine library), `routineUserRecord/offline/*` sync.
+
 ## Confirmed against the live API
 
 Checked on 2026-10-12 with a real account, logging in as a server (`deviceSn` `cozyla-sdk`).
@@ -358,6 +394,7 @@ Checked on 2026-10-15:
 
 - Chore create, update, delete, `choreRecordByDay/v3` and `choreCheck/v1` (complete and reopen) succeed with the bodies documented above; completing awards the chore's stars to the member's `coins` and reopening removes them.
 - `repeatsUntil: true` repeats past `endDay`; `repeatsUntil: false` stops at it.
+- Routine create, update, delete, `getRoutineRecordByDay/v1` and `checkUserRoutine` (complete and reopen) succeed with the bodies documented above; stars move like chores. Update keeps the routine `id`.
 
 ## Open questions
 

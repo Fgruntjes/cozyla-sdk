@@ -80,3 +80,25 @@ def test_chore_completion(http, cloud):
     )
     assert http.delete(f"/chores/{chore_id}", headers=AUTH).status_code == 204
     assert http.get(f"/chores/{chore_id}", headers=AUTH).status_code == 404
+
+
+def test_routine_completion(http, cloud):
+    created = http.post(
+        "/routines",
+        json={"members": ["m-1"], "name": "Read", "icon": "book", "period": "evening"},
+        headers=AUTH,
+    )
+    assert created.status_code == 201
+    [routine] = created.json()
+
+    completion = f"/routines/{routine['id']}/completions/2026-10-20"
+    assert http.put(completion, headers=AUTH).status_code == 204
+    day = http.get("/routines/occurrences", params={"day": "2026-10-20"}, headers=AUTH).json()
+    assert {"routine_id": routine["id"], "status": "completed"}.items() <= next(
+        o for o in day if o["routine_id"] == routine["id"]
+    ).items()
+    assert http.delete(completion, headers=AUTH).status_code == 204
+    assert cloud.routine_checks[(int(routine["id"]), "2026-10-20")] == "pending"
+
+    assert http.delete(f"/routines/{routine['id']}", headers=AUTH).status_code == 204
+    assert http.get(f"/routines/{routine['id']}", headers=AUTH).status_code == 404
