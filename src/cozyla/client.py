@@ -321,6 +321,7 @@ class CozylaClient:
         raise NotFoundError(f"chore {chore_id}")
 
     async def create_chore(self, data: ChoreCreate) -> Chore:
+        data = data.model_copy(update={"start": data.start or self.today()})
         result = await self.call(
             "/cal-server/rewards/chores/create/v1", {**_chore_body(data), "asATemplate": False}
         )
@@ -328,7 +329,10 @@ class CozylaClient:
 
     async def update_chore(self, chore_id: str, data: ChoreUpdate) -> Chore:
         current = await self.get_chore(chore_id)
-        updated = current.model_copy(update=data.model_dump(exclude_unset=True))
+        changes = {field: getattr(data, field) for field in data.model_fields_set}
+        if current.repeat is None and changes.get("repeat"):
+            changes.setdefault("end", None)
+        updated = current.model_copy(update=changes)
         result = await self.call(
             "/cal-server/rewards/chores/update/v1", {"choreUid": chore_id, **_chore_body(updated)}
         )
@@ -376,6 +380,7 @@ class CozylaClient:
         raise NotFoundError(f"routine {routine_id}")
 
     async def create_routines(self, data: RoutineCreate) -> list[Routine]:
+        data = data.model_copy(update={"start": data.start or self.today()})
         result = await self.call(
             "/cal-server/rewards/routineUser/createRoutine",
             {**_routine_body(data), "memberUids": data.members, "asATemplate": False},
@@ -385,7 +390,8 @@ class CozylaClient:
 
     async def update_routine(self, routine_id: str, data: RoutineUpdate) -> Routine:
         current = await self.get_routine(routine_id)
-        updated = current.model_copy(update=data.model_dump(exclude_unset=True))
+        changes = {field: getattr(data, field) for field in data.model_fields_set}
+        updated = current.model_copy(update=changes)
         await self.call(
             "/cal-server/rewards/routineUser/updateRoutine",
             {"id": int(routine_id), "toDay": self.today().isoformat(), **_routine_body(updated)},

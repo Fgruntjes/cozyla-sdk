@@ -186,7 +186,7 @@ async def complete_chore(chore_id: str, day: date, member_id: str, client: Clien
 
 
 @app.delete("/chores/{chore_id}/completions/{day}/{member_id}", status_code=204, tags=["chores"])
-async def uncomplete_chore(chore_id: str, day: date, member_id: str, client: Client) -> None:
+async def reopen_chore(chore_id: str, day: date, member_id: str, client: Client) -> None:
     await client.set_chore_completed(chore_id, day, member_id, False)
 
 
@@ -228,7 +228,7 @@ async def complete_routine(routine_id: str, day: date, client: Client) -> None:
 
 
 @app.delete("/routines/{routine_id}/completions/{day}", status_code=204, tags=["routines"])
-async def uncomplete_routine(routine_id: str, day: date, client: Client) -> None:
+async def reopen_routine(routine_id: str, day: date, client: Client) -> None:
     await client.set_routine_completed(routine_id, day, False)
 
 

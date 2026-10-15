@@ -197,3 +197,21 @@ def test_catalog_reward_keeps_product_on_update(cloud, make_client):
         12,
         1,
     )
+
+
+def test_one_off_chore_made_monthly_repeats_forever(cloud, make_client):
+    day = date(2026, 10, 14)
+    monthly = Repeat(frequency="monthly", days=["1", "15"])
+
+    async def run():
+        client = make_client()
+        chore = await client.create_chore(
+            ChoreCreate(name="Pay rent", icon="money", members=["m-1"], start=day)
+        )
+        return chore, await client.update_chore(chore.id, ChoreUpdate(repeat=monthly))
+
+    one_off, monthly_chore = asyncio.run(run())
+    assert (one_off.repeat, one_off.end) == (None, day)
+    assert (monthly_chore.repeat, monthly_chore.end) == (monthly, None)
+    stored = cloud.chores[monthly_chore.id]
+    assert (stored["repeatsIn"], stored["repeatsUntil"]) == ("1,15", True)

@@ -12,6 +12,10 @@ def _lower(value):
     return value.lower() if isinstance(value, str) else value
 
 
+def _member_ids(refs):
+    return [ref["memberUid"] for ref in refs or []]
+
+
 Id = Annotated[str, BeforeValidator(str)]
 EpochMs = Annotated[datetime | None, BeforeValidator(_unset_to_none)]
 Minutes = Annotated[int | None, BeforeValidator(_unset_to_none)]
@@ -103,13 +107,13 @@ class Repeat(BaseModel):
     )
 
 
-def repeat_from_cloud(chore: dict) -> Repeat | None:
-    if not chore.get("repeats", True):
+def repeat_from_cloud(schedule: dict) -> Repeat | None:
+    if not schedule.get("repeats", True):
         return None
     return Repeat(
-        frequency=chore["repeatsEvery"].lower(),
-        interval=chore.get("repeatsEveryCounts") or 1,
-        days=[day.lower() for day in (chore.get("repeatsIn") or "").split(",") if day],
+        frequency=schedule["repeatsEvery"].lower(),
+        interval=schedule.get("repeatsEveryCounts") or 1,
+        days=[day.lower() for day in (schedule.get("repeatsIn") or "").split(",") if day],
     )
 
 
@@ -146,7 +150,7 @@ class ChoreCreate(BaseModel):
     rotate_every: int = Field(1, ge=1, description="Rotate the assignee every this many times")
     chore_bank: bool = Field(False, description="Unassigned chore any member can claim")
     stars: int = Field(1, ge=0, description="Stars earned per completion")
-    start: date = Field(default_factory=date.today)
+    start: date | None = Field(None, description="First day; default today")
     end: date | None = Field(None, description="Last day; none repeats forever")
     due_time: str = Field("23:59", pattern=r"^\d{2}:\d{2}$")
     repeat: Repeat | None = Field(None, description="None is a one-off chore from start to end")
@@ -194,7 +198,7 @@ class Chore(Repeating):
         if isinstance(data, dict) and "choreUid" in data:
             data = {
                 **data,
-                "memberRefs": [ref["memberUid"] for ref in data.get("memberRefs") or []],
+                "memberRefs": _member_ids(data.get("memberRefs")),
                 "description": data.get("description") or "",
             }
             if data.get("repeats") and data.get("repeatsUntil"):
@@ -223,7 +227,7 @@ class RoutineCreate(BaseModel):
     period: RoutinePeriod
     stars: int = Field(1, ge=0, description="Stars earned per completion")
     repeat: Repeat = Repeat()
-    start: date = Field(default_factory=date.today)
+    start: date | None = Field(None, description="First day; default today")
     description: str = ""
     habit_enabled: bool = False
     habit_bonus_stars: int = Field(0, ge=0)
@@ -253,7 +257,7 @@ class Routine(Repeating):
     stars: int = Field(validation_alias=_alias("coins", "stars"))
     repeat: Repeat
     start: date = Field(validation_alias=_alias("startDay", "start"))
-    description: str = Field("", validation_alias=_alias("description", "description"))
+    description: str = ""
     habit_enabled: bool = Field(False, validation_alias=_alias("habitEnabled", "habit_enabled"))
     habit_bonus_stars: int = Field(
         0, validation_alias=_alias("habitBonusStars", "habit_bonus_stars")
@@ -292,10 +296,6 @@ class RewardUpdate(BaseModel):
     repeatable: bool | None = None
     needs_approval: bool | None = None
     link: str | None = None
-
-
-def _member_ids(refs):
-    return [ref["memberUid"] for ref in refs or []]
 
 
 class Reward(BaseModel):
