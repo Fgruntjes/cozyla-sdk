@@ -13,7 +13,7 @@ Cozyla can change that API at any time, and using it may conflict with their ter
 | Family members (to-do assignees) | ✅ read |
 | Tasks → Chores | ✅ list, create, update, delete, per-day occurrences, complete/reopen per member |
 | Tasks → Routines | ✅ list, create (one per member), update, delete, per-day occurrences, complete/reopen |
-| Tasks → Rewards | planned |
+| Tasks → Rewards | ✅ list, create, update, delete, redeem, approve/deny, undo redemption |
 | Meals → Meal plan, Grocery, Pantry | planned |
 | Notes | planned |
 | Calendar | use Cozyla's built-in CalDAV/Google sync and HA's CalDAV integration |

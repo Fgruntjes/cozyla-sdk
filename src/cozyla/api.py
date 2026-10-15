@@ -15,6 +15,12 @@ from cozyla.models import (
     ChoreOccurrence,
     ChoreUpdate,
     Member,
+    Redemption,
+    RedemptionCreate,
+    RedemptionStatus,
+    Reward,
+    RewardCreate,
+    RewardUpdate,
     Routine,
     RoutineCreate,
     RoutineOccurrence,
@@ -224,3 +230,60 @@ async def complete_routine(routine_id: str, day: date, client: Client) -> None:
 @app.delete("/routines/{routine_id}/completions/{day}", status_code=204, tags=["routines"])
 async def uncomplete_routine(routine_id: str, day: date, client: Client) -> None:
     await client.set_routine_completed(routine_id, day, False)
+
+
+@app.get("/rewards", tags=["rewards"])
+async def list_rewards(client: Client) -> list[Reward]:
+    return await client.list_rewards()
+
+
+@app.post("/rewards", status_code=201, tags=["rewards"])
+async def create_reward(data: RewardCreate, client: Client) -> Reward:
+    return await client.create_reward(data)
+
+
+@app.get("/rewards/{reward_id}", tags=["rewards"])
+async def get_reward(reward_id: str, client: Client) -> Reward:
+    return await client.get_reward(reward_id)
+
+
+@app.patch("/rewards/{reward_id}", tags=["rewards"])
+async def update_reward(reward_id: str, data: RewardUpdate, client: Client) -> Reward:
+    return await client.update_reward(reward_id, data)
+
+
+@app.delete("/rewards/{reward_id}", status_code=204, tags=["rewards"])
+async def delete_reward(reward_id: str, client: Client) -> None:
+    await client.delete_reward(reward_id)
+
+
+@app.post("/rewards/{reward_id}/redemptions", status_code=201, tags=["rewards"])
+async def redeem_reward(reward_id: str, data: RedemptionCreate, client: Client) -> Redemption:
+    return await client.redeem_reward(reward_id, data.member)
+
+
+@app.get("/redemptions", tags=["rewards"])
+async def list_redemptions(
+    client: Client, member: str | None = None, status: RedemptionStatus | None = None
+) -> list[Redemption]:
+    return await client.list_redemptions(member, status)
+
+
+@app.get("/redemptions/{redemption_id}", tags=["rewards"])
+async def get_redemption(redemption_id: str, client: Client) -> Redemption:
+    return await client.get_redemption(redemption_id)
+
+
+@app.post("/redemptions/{redemption_id}/approve", status_code=204, tags=["rewards"])
+async def approve_redemption(redemption_id: str, client: Client) -> None:
+    await client.approve_redemption(redemption_id, True)
+
+
+@app.post("/redemptions/{redemption_id}/deny", status_code=204, tags=["rewards"])
+async def deny_redemption(redemption_id: str, client: Client) -> None:
+    await client.approve_redemption(redemption_id, False)
+
+
+@app.delete("/redemptions/{redemption_id}", status_code=204, tags=["rewards"])
+async def undo_redemption(redemption_id: str, client: Client) -> None:
+    await client.undo_redemption(redemption_id)

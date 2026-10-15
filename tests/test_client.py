@@ -3,13 +3,15 @@ import base64
 from datetime import UTC, date, datetime
 
 import pytest
-from conftest import CHORE_ID, LIST_ID, ROUTINE_ID, TODO_ID
+from conftest import CHORE_ID, LIST_ID, REWARD_ID, ROUTINE_ID, TODO_ID
 
 from cozyla.client import CozylaError, NotFoundError, encrypt_password
 from cozyla.models import (
     ChoreCreate,
     ChoreUpdate,
     Repeat,
+    RewardCreate,
+    RewardUpdate,
     RoutineCreate,
     RoutineUpdate,
     TodoCreate,
@@ -156,3 +158,42 @@ def test_routine_lifecycle(cloud, make_client):
     assert (created[1].id, "completed") in statuses
     assert (created[0].id, "pending") in statuses
     assert [r.id for r in remaining] == [str(ROUTINE_ID), created[0].id]
+
+
+def test_reward_redemption_lifecycle(cloud, make_client):
+    async def run():
+        client = make_client()
+        reward = await client.create_reward(
+            RewardCreate(name="Ice cream", stars=5, members=["m-1"], needs_approval=True)
+        )
+        renamed = await client.update_reward(reward.id, RewardUpdate(name="Big ice cream"))
+        denied = await client.redeem_reward(reward.id, "m-1")
+        await client.approve_redemption(denied.id, False)
+        approved = await client.redeem_reward(reward.id, "m-1")
+        await client.approve_redemption(approved.id, True)
+        history = await client.list_redemptions(member="m-1")
+        await client.undo_redemption(approved.id)
+        await client.delete_reward(reward.id)
+        return reward, renamed, denied, history, await client.list_rewards()
+
+    reward, renamed, denied, history, remaining = asyncio.run(run())
+    assert (reward.stars, reward.needs_approval, reward.members) == (5, True, ["m-1"])
+    assert (renamed.name, renamed.stars) == ("Big ice cream", 5)
+    assert (denied.reward_id, denied.member, denied.status) == (
+        reward.id,
+        "m-1",
+        "pending_approval",
+    )
+    assert [(r.name, r.status) for r in history] == [("Big ice cream", "done")]
+    assert cloud.redemptions == {}
+    assert [r.id for r in remaining] == [REWARD_ID]
+
+
+def test_catalog_reward_keeps_product_on_update(cloud, make_client):
+    asyncio.run(make_client().update_reward(REWARD_ID, RewardUpdate(stars=12)))
+    update = next(body for path, body, _ in cloud.requests if path.endswith("rewards/update"))
+    assert (update["productId"], update["coins"], update["renewable"]) == (
+        "2044319487125233670",
+        12,
+        1,
+    )

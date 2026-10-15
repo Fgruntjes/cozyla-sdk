@@ -9,6 +9,7 @@ LIST_ID = 2105009974451359744
 TODO_ID = 2105029434214182912
 CHORE_ID = "c0ffee00000000000000000000000001"
 ROUTINE_ID = 1516579
+REWARD_ID = "feb896d760564e3cbafa8e2604591319"
 
 
 class FakeCloud:
@@ -83,6 +84,21 @@ class FakeCloud:
             }
         }
         self.routine_checks: dict[tuple[int, str], str] = {}
+        self.rewards = {
+            REWARD_ID: {
+                "rewardUid": REWARD_ID,
+                "name": "Extra Screen Time",
+                "description": "30 bonus minutes",
+                "coins": 10,
+                "icon": "czl_reward_gift",
+                "renewable": 1,
+                "approval": 0,
+                "members": [{"memberUid": "m-1"}],
+                "link": "",
+                "productId": 2044319487125233670,
+            }
+        }
+        self.redemptions: dict[str, dict] = {}
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -220,6 +236,60 @@ class FakeCloud:
     def rewards_routineUserRecord_checkUserRoutine(self, body):
         assert body["weekFirstDate"] == 1
         self.routine_checks[(body["routineId"], body["checkDay"])] = body["status"]
+
+    def rewards_rewards_list_v1(self, body):
+        return list(self.rewards.values())
+
+    def store_reward(self, body):
+        reward = {k: v for k, v in body.items() if k not in ("memberUids", "rewardDeviceId")}
+        reward["members"] = [{"memberUid": m} for m in body["memberUids"]]
+        self.rewards[reward["rewardUid"]] = reward
+        return {**reward, "members": None, "rewardMemberList": reward["members"]}
+
+    def rewards_rewards_create(self, body):
+        assert len(body["rewardDeviceId"]) == 32
+        return self.store_reward({**body, "rewardUid": f"r{len(self.rewards):031d}"})
+
+    def rewards_rewards_update(self, body):
+        self.store_reward(body)
+
+    def rewards_rewards_delete(self, body):
+        del self.rewards[body["rewardUid"]]
+
+    def rewards_rewards_redeem_v1(self, body):
+        reward = self.rewards[body["rewardUid"]]
+        record_id = f"rec{len(self.redemptions)}"
+        status = "WAIT_APPROVE" if reward["approval"] else "DONE"
+        self.redemptions[record_id] = {
+            **reward,
+            "memberUid": body["memberUid"],
+            "rewardMemberRecordUid": record_id,
+            "rewardStatus": status,
+            "updateDateTimestamp": 1790772366000,
+        }
+        return {"rewardMemberRecordUid": record_id, "redeemStatus": status}
+
+    def rewards_rewards_rewardApprove_v1(self, body):
+        record_id = body["rewardMemberRecordUid"]
+        if body["approveStatus"]:
+            self.redemptions[record_id]["rewardStatus"] = "DONE"
+        else:
+            del self.redemptions[record_id]
+
+    def rewards_rewards_unRedeem(self, body):
+        del self.redemptions[body["rewardMemberRecordUid"]]
+
+    def rewards_offline_findMemberAllRewards_v1(self, body):
+        available = [
+            {**reward, "memberUid": ref["memberUid"], "rewardMemberRecordUid": None}
+            for reward in self.rewards.values()
+            for ref in reward["members"]
+        ]
+        return [
+            {**row, "rewardStatus": row.get("rewardStatus", "WAITING")}
+            for row in available + list(self.redemptions.values())
+            if not body["memberUids"] or row["memberUid"] in body["memberUids"]
+        ]
 
 
 @pytest.fixture

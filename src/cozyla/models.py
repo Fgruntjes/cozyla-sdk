@@ -270,3 +270,65 @@ class RoutineOccurrence(BaseModel):
     stars: int = Field(validation_alias=_alias("coins", "stars"))
     status: Literal["pending", "completed"]
     week_start: int = Field(1, validation_alias=_alias("weekFirstDate", "week_start"), exclude=True)
+
+
+class RewardCreate(BaseModel):
+    name: str = Field(min_length=1)
+    stars: int = Field(ge=0, description="Stars a member spends to redeem it")
+    members: list[str] = Field(min_length=1, description="Member ids who can redeem it")
+    description: str = ""
+    icon: str = "czl_reward_gift"
+    repeatable: bool = Field(False, description="Can be redeemed again after redemption")
+    needs_approval: bool = Field(False, description="A parent approves each redemption")
+    link: str = ""
+
+
+class RewardUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1)
+    stars: int | None = Field(None, ge=0)
+    members: list[str] | None = Field(None, min_length=1)
+    description: str | None = None
+    icon: str | None = None
+    repeatable: bool | None = None
+    needs_approval: bool | None = None
+    link: str | None = None
+
+
+def _member_ids(refs):
+    return [ref["memberUid"] for ref in refs or []]
+
+
+class Reward(BaseModel):
+    id: str = Field(validation_alias=_alias("rewardUid", "id"))
+    name: str
+    stars: int = Field(validation_alias=_alias("coins", "stars"))
+    members: Annotated[list[str], BeforeValidator(_member_ids)]
+    description: str = ""
+    icon: str = ""
+    repeatable: bool = Field(False, validation_alias=_alias("renewable", "repeatable"))
+    needs_approval: bool = Field(False, validation_alias=_alias("approval", "needs_approval"))
+    link: str = ""
+    product_id: Annotated[str, BeforeValidator(lambda value: str(value or ""))] = Field(
+        "", validation_alias=_alias("productId", "product_id"), exclude=True
+    )
+
+
+REDEMPTION_STATUSES = {"WAIT_APPROVE": "pending_approval", "ALREADY": "approved", "DONE": "done"}
+RedemptionStatus = Literal["pending_approval", "approved", "done"]
+
+
+class RedemptionCreate(BaseModel):
+    member: str = Field(description="Member id who spends the stars")
+
+
+class Redemption(BaseModel):
+    id: str = Field(validation_alias=_alias("rewardMemberRecordUid", "id"))
+    reward_id: str = Field(validation_alias=_alias("rewardUid", "reward_id"))
+    member: str = Field(validation_alias=_alias("memberUid", "member"))
+    name: str
+    stars: int = Field(validation_alias=_alias("coins", "stars"))
+    status: Annotated[
+        RedemptionStatus,
+        BeforeValidator(lambda status: REDEMPTION_STATUSES.get(status, status)),
+    ] = Field(validation_alias=_alias("rewardStatus", "status"))
+    updated_at: EpochMs = Field(None, validation_alias=_alias("updateDateTimestamp", "updated_at"))

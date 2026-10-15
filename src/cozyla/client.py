@@ -1,5 +1,6 @@
 import base64
 import json
+import uuid
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
@@ -13,6 +14,11 @@ from cozyla.models import (
     ChoreOccurrence,
     ChoreUpdate,
     Member,
+    Redemption,
+    RedemptionStatus,
+    Reward,
+    RewardCreate,
+    RewardUpdate,
     Routine,
     RoutineCreate,
     RoutineOccurrence,
@@ -117,6 +123,21 @@ def _routine_body(routine: Routine | RoutineCreate) -> dict:
         **repeat_to_cloud(routine.repeat),
         "startDay": routine.start.isoformat(),
         "description": routine.description,
+    }
+
+
+def _reward_body(reward: Reward | RewardCreate) -> dict:
+    return {
+        "name": reward.name,
+        "description": reward.description,
+        "icon": reward.icon,
+        "coins": reward.stars,
+        "productId": getattr(reward, "product_id", ""),
+        "link": reward.link,
+        "renewable": int(reward.repeatable),
+        "approval": int(reward.needs_approval),
+        "rewardDeviceId": uuid.uuid4().hex,
+        "memberUids": reward.members,
     }
 
 
@@ -399,4 +420,68 @@ class CozylaClient:
                 "status": "completed" if completed else "pending",
                 "weekFirstDate": occurrence.week_start,
             },
+        )
+
+    async def list_rewards(self) -> list[Reward]:
+        result = await self.call("/cal-server/rewards/rewards/list/v1")
+        return [Reward.model_validate(r) for r in result or []]
+
+    async def get_reward(self, reward_id: str) -> Reward:
+        for reward in await self.list_rewards():
+            if reward.id == reward_id:
+                return reward
+        raise NotFoundError(f"reward {reward_id}")
+
+    async def create_reward(self, data: RewardCreate) -> Reward:
+        result = await self.call("/cal-server/rewards/rewards/create", _reward_body(data))
+        return await self.get_reward(result["rewardUid"])
+
+    async def update_reward(self, reward_id: str, data: RewardUpdate) -> Reward:
+        current = await self.get_reward(reward_id)
+        updated = current.model_copy(update=data.model_dump(exclude_unset=True))
+        await self.call(
+            "/cal-server/rewards/rewards/update", {"rewardUid": reward_id, **_reward_body(updated)}
+        )
+        return await self.get_reward(reward_id)
+
+    async def delete_reward(self, reward_id: str) -> None:
+        await self.get_reward(reward_id)
+        await self.call("/cal-server/rewards/rewards/delete", {"rewardUid": reward_id})
+
+    async def list_redemptions(
+        self, member: str | None = None, status: RedemptionStatus | None = None
+    ) -> list[Redemption]:
+        result = await self.call(
+            "/cal-server/rewards/offline/findMemberAllRewards/v1",
+            {"memberUids": [member] if member else [], "rewardStatus": ""},
+        )
+        redemptions = [
+            Redemption.model_validate(r) for r in result or [] if r.get("rewardMemberRecordUid")
+        ]
+        return [r for r in redemptions if status is None or r.status == status]
+
+    async def get_redemption(self, redemption_id: str) -> Redemption:
+        for redemption in await self.list_redemptions():
+            if redemption.id == redemption_id:
+                return redemption
+        raise NotFoundError(f"redemption {redemption_id}")
+
+    async def redeem_reward(self, reward_id: str, member: str) -> Redemption:
+        await self.get_reward(reward_id)
+        result = await self.call(
+            "/cal-server/rewards/rewards/redeem/v1", {"memberUid": member, "rewardUid": reward_id}
+        )
+        return await self.get_redemption(result["rewardMemberRecordUid"])
+
+    async def approve_redemption(self, redemption_id: str, approved: bool) -> None:
+        await self.get_redemption(redemption_id)
+        await self.call(
+            "/cal-server/rewards/rewards/rewardApprove/v1",
+            {"rewardMemberRecordUid": redemption_id, "approveStatus": int(approved)},
+        )
+
+    async def undo_redemption(self, redemption_id: str) -> None:
+        await self.get_redemption(redemption_id)
+        await self.call(
+            "/cal-server/rewards/rewards/unRedeem", {"rewardMemberRecordUid": redemption_id}
         )

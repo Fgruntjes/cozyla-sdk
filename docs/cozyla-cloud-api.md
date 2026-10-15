@@ -374,6 +374,40 @@ The app uses `getRoutineList/v2` instead of `v1` when the account setting `rewar
 
 Not used by this project: `routineUser/updateDisplayOrder`, `routineUser/createBathRoutine` (onboarding), `routineUserRecord/getRoutineRecordByScope` (date range), `routineTemplate/*` (routine library), `routineUserRecord/offline/*` sync.
 
+## Rewards
+
+From `com.cozyla.choresreward` 1.2.8.2026091017. Reward calls are not in `CozylaService`: the app posts plain maps to path constants in `api/Api.java` (`ee/n.java`, bodies built in `ui/reward/create/CreateRewardDialog.java`, `ui/reward/*.java`, `sb/*.java`). Paths are under `/cal-server/rewards/`. Members' star balance is `coins` in `queryMembers`.
+
+Reward (`bean/RewardListDataBean`):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `rewardUid` | string | id |
+| `name`, `description`, `link` | string | |
+| `icon` | string | `czl_reward_gift` or an image URL |
+| `coins` | int | stars a member spends |
+| `renewable` | int | `1` = can be redeemed again |
+| `approval` | int | `1` = a parent approves each redemption |
+| `members` | list | `{memberUid, memberName, headPortrait}` who can redeem it |
+| `productId` | long or null | set on rewards taken from the ideas catalog (`rewards/product/list`) |
+
+| Path | Body (beyond `deviceUid`) | Result |
+|---|---|---|
+| `rewards/list/v1` | none | rewards |
+| `rewards/create` | `name`, `description`, `icon`, `coins`, `productId` (string, `""` if none), `link`, `renewable`, `approval`, `rewardDeviceId` (random 32-hex string), `memberUids: [..]` | the reward, with `rewardMemberList` instead of `members` |
+| `rewards/update` | create body plus `rewardUid` | none |
+| `rewards/delete` | `{ "rewardUid": ".." }` | none |
+| `rewards/redeem/v1` | `{ "memberUid": "..", "rewardUid": ".." }` | `{ rewardMemberRecordUid, redeemStatus, consumeCoins, .. }` |
+| `rewards/rewardApprove/v1` | `{ "rewardMemberRecordUid": "..", "approveStatus": 1 }` (`0` = deny) | none |
+| `rewards/unRedeem` | `{ "rewardMemberRecordUid": ".." }` | none |
+| `offline/findMemberAllRewards/v1` | `{ "memberUids": [], "rewardStatus": "" }` (empty = all) | redemption records, see below |
+
+`findMemberAllRewards/v1` returns one row per reward per member plus one row per redemption. Rows with `rewardMemberRecordUid: null` are availability (`rewardStatus` `WAITING` = enough stars, `CANNOT` = not enough). Redemption rows carry `rewardMemberRecordUid`, `rewardStatus` (`WAIT_APPROVE`, `ALREADY`, `DONE`), `memberUid`, the reward fields and `updateDateTimestamp` (epoch ms).
+
+Redemption flow: `redeem/v1` takes the stars and creates a `WAIT_APPROVE` record when `approval` is `1`, else a `DONE` record. Approving moves it to `DONE`; denying deletes it and refunds the stars. `unRedeem` deletes any record and refunds.
+
+Not used by this project: `rewards/done` (`doneStatus` 1/0; meant to move `ALREADY` → `DONE`), `rewards/getAwaitRewardControls` (counts), `rewards/addStars` (manual star adjustment), `rewards/getRecord` (star history), `rewards/product/list` (ideas catalog), `files/file/UploadReq` (custom icon upload), `familyView/selectChoresRoutineStarsNumInfo/v1` (stars earned per day).
+
 ## Confirmed against the live API
 
 Checked on 2026-10-12 with a real account, logging in as a server (`deviceSn` `cozyla-sdk`).
@@ -395,6 +429,9 @@ Checked on 2026-10-15:
 - Chore create, update, delete, `choreRecordByDay/v3` and `choreCheck/v1` (complete and reopen) succeed with the bodies documented above; completing awards the chore's stars to the member's `coins` and reopening removes them.
 - `repeatsUntil: true` repeats past `endDay`; `repeatsUntil: false` stops at it.
 - Routine create, update, delete, `getRoutineRecordByDay/v1` and `checkUserRoutine` (complete and reopen) succeed with the bodies documented above; stars move like chores. Update keeps the routine `id`.
+- Reward create, update, delete, `redeem/v1`, `rewardApprove/v1` (approve and deny) and `unRedeem` succeed with the bodies documented above.
+- Approving goes straight from `WAIT_APPROVE` to `DONE`; no `ALREADY` state was seen, and `rewards/done` changed nothing on a `DONE` record.
+- Redeeming takes the stars at once, also while waiting for approval; deny and `unRedeem` refund them.
 
 ## Open questions
 
@@ -403,3 +440,6 @@ Checked on 2026-10-15:
 - **`deleteTime` semantics** in `deleteTodoByTime`.
 - **Rate-limit policy** behind `code` `1002`.
 - **Meaning of the `isPreset` codes.**
+- **Chore `status` int**, `taskData`/`taskUid` on occurrence records.
+- **Habit bonus**: when `habitBonusStars` is awarded.
+- **When rewards reach `ALREADY`**, and what `rewards/done` does then.

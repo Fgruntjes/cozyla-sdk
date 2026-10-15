@@ -102,3 +102,26 @@ def test_routine_completion(http, cloud):
 
     assert http.delete(f"/routines/{routine['id']}", headers=AUTH).status_code == 204
     assert http.get(f"/routines/{routine['id']}", headers=AUTH).status_code == 404
+
+
+def test_reward_redemption(http, cloud):
+    reward = http.post(
+        "/rewards",
+        json={"name": "Ice cream", "stars": 5, "members": ["m-1"], "needs_approval": True},
+        headers=AUTH,
+    ).json()
+
+    redeemed = http.post(
+        f"/rewards/{reward['id']}/redemptions", json={"member": "m-1"}, headers=AUTH
+    )
+    assert redeemed.status_code == 201
+    redemption = redeemed.json()
+    pending = http.get("/redemptions", params={"status": "pending_approval"}, headers=AUTH).json()
+    assert [r["id"] for r in pending] == [redemption["id"]]
+
+    assert http.post(f"/redemptions/{redemption['id']}/approve", headers=AUTH).status_code == 204
+    assert http.get(f"/redemptions/{redemption['id']}", headers=AUTH).json()["status"] == "done"
+
+    assert http.delete(f"/redemptions/{redemption['id']}", headers=AUTH).status_code == 204
+    assert http.post(f"/redemptions/{redemption['id']}/deny", headers=AUTH).status_code == 404
+    assert http.delete(f"/rewards/{reward['id']}", headers=AUTH).status_code == 204
