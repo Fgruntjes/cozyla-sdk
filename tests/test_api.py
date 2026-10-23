@@ -85,7 +85,13 @@ def test_chore_completion(http, cloud):
 def test_routine_completion(http, cloud):
     created = http.post(
         "/routines",
-        json={"members": ["m-1"], "name": "Read", "icon": "book", "period": "evening"},
+        json={
+            "members": ["m-1"],
+            "name": "Read",
+            "icon": "book",
+            "period": "evening",
+            "start": "2026-10-14",
+        },
         headers=AUTH,
     )
     assert created.status_code == 201
